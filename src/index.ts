@@ -18,8 +18,6 @@ config();
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
 const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || 'production';
-const CALLBACK_PORT = parseInt(process.env.OAUTH_CALLBACK_PORT || '3000');
-
 if (!CONSUMER_KEY || !CONSUMER_SECRET) {
   console.error('Missing required environment variables: EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET');
   process.exit(1);
@@ -34,7 +32,7 @@ const evernoteConfig: EvernoteConfig = {
 };
 
 // Initialize OAuth and API
-const oauth = new EvernoteOAuth(evernoteConfig, CALLBACK_PORT);
+const oauth = new EvernoteOAuth(evernoteConfig);
 let api: EvernoteAPI | null = null;
 
 // Initialize API on first use
@@ -517,7 +515,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   console.error('Starting Evernote MCP server...');
   console.error(`Environment: ${ENVIRONMENT}`);
-  console.error(`OAuth callback port: ${CALLBACK_PORT}`);
   
   const transport = new StdioServerTransport();
   await server.connect(transport);

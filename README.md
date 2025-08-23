@@ -76,12 +76,50 @@ Add to your Claude Desktop configuration file:
 
 ## Authentication
 
-On first use, the server will:
-1. Open your browser for Evernote authorization
-2. Start a local server to handle the OAuth callback
-3. Save the access token for future use
+### Step 1: Authenticate with Evernote
 
-The token is stored in `.evernote-token.json` in your working directory.
+Before using the MCP server with Claude Desktop, you need to authenticate with Evernote:
+
+```bash
+# If installed globally
+mcp-evernote-auth
+
+# If running from source
+npm run auth
+
+# Or directly
+npx tsx src/auth-standalone.ts
+```
+
+This will:
+1. Open your browser for Evernote authorization
+2. Start a local server to handle the OAuth callback  
+3. Save the access token to `.evernote-token.json`
+
+The authentication only needs to be done once. The token will be reused for future sessions.
+
+### Step 2: Configure Claude Desktop
+
+After authentication, the MCP server will automatically use the saved token.
+
+### Alternative: Environment Variable Authentication
+
+For advanced users or CI/CD environments, you can provide the token directly:
+
+```json
+{
+  "mcpServers": {
+    "evernote": {
+      "command": "npx",
+      "args": ["@verygoodplugins/mcp-evernote"],
+      "env": {
+        "EVERNOTE_ACCESS_TOKEN": "your-access-token",
+        "EVERNOTE_NOTESTORE_URL": "your-notestore-url"
+      }
+    }
+  }
+}
+```
 
 ## Available Tools
 
@@ -221,12 +259,25 @@ Sync my "Important Concepts" notebook to memory for long-term retention
 
 ## Troubleshooting
 
-### OAuth Issues
+### Authentication Issues
 
-If you encounter OAuth problems:
+#### "Authentication required" error in Claude Desktop
+This means you haven't authenticated yet. Run the authentication script:
+```bash
+npm run auth
+```
+
+#### OAuth callback fails
+If the OAuth callback doesn't work:
+1. Make sure port 3000 is available (or set `OAUTH_CALLBACK_PORT` in `.env`)
+2. Check your firewall settings
+3. Try using a different browser
+
+#### Token expired
+If your token expires:
 1. Delete `.evernote-token.json`
-2. Restart the MCP server
-3. Re-authenticate when prompted
+2. Run `npm run auth` again
+3. Restart Claude Desktop
 
 ### Connection Errors
 
@@ -299,7 +350,7 @@ GPL-3.0 - See [LICENSE](LICENSE) file for details.
 
 - Built with [Model Context Protocol SDK](https://github.com/anthropics/model-context-protocol)
 - Powered by [Evernote API](https://dev.evernote.com/)
-- Part of the Very Good Plugins ecosystem
+- Part of the [Very Good Plugins](https://github.com/verygoodplugins) ecosystem
 
 ## Roadmap
 
