@@ -32,7 +32,9 @@ lerna-debug.log*
 Thumbs.db
 
 # IDE
+*.code-workspace
 .vscode/
+.cursor/
 .idea/
 *.swp
 *.swo
@@ -41,6 +43,7 @@ Thumbs.db
 # OAuth tokens
 tokens/
 *.token.json
+.evernote-token.json
 
 # Temp files
 tmp/

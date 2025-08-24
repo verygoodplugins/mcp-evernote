@@ -6,10 +6,14 @@ import { EvernoteConfig, OAuthTokens } from './types.js';
 export class EvernoteOAuth {
   private config: EvernoteConfig;
   private tokenFile: string;
+  private isClaudeCode: boolean;
 
   constructor(config: EvernoteConfig) {
     this.config = config;
     this.tokenFile = path.join(process.cwd(), '.evernote-token.json');
+    
+    // Detect if running in Claude Code
+    this.isClaudeCode = !!(process.env.MCP_TRANSPORT || process.env.CLAUDE_CODE_MCP);
   }
 
   async getAccessToken(): Promise<OAuthTokens> {
@@ -24,6 +28,18 @@ export class EvernoteOAuth {
       };
     }
     
+    // Check if Claude Code is providing OAuth tokens
+    // Claude Code may pass tokens after /mcp authentication
+    if (this.isClaudeCode && process.env.OAUTH_TOKEN) {
+      console.error('Using OAuth token from Claude Code');
+      return {
+        token: process.env.OAUTH_TOKEN,
+        noteStoreUrl: process.env.OAUTH_NOTESTORE_URL,
+        webApiUrlPrefix: process.env.OAUTH_WEBAPI_URL,
+        userId: process.env.OAUTH_USER_ID ? parseInt(process.env.OAUTH_USER_ID) : undefined
+      };
+    }
+    
     // Try to load existing token from file
     const existingToken = await this.loadToken();
     if (existingToken) {
@@ -31,26 +47,46 @@ export class EvernoteOAuth {
       return existingToken;
     }
 
-    // In stdio mode (MCP server), we can't do interactive OAuth
-    console.error('═══════════════════════════════════════════════════════════');
-    console.error('🔐 AUTHENTICATION REQUIRED');
-    console.error('═══════════════════════════════════════════════════════════');
-    console.error('');
-    console.error('No Evernote authentication token found.');
-    console.error('');
-    console.error('Please run the authentication setup first:');
-    console.error('');
-    console.error('  npm run auth');
-    console.error('');
-    console.error('Or if running from source:');
-    console.error('');
-    console.error('  npx tsx src/auth-standalone.ts');
-    console.error('');
-    console.error('This will open your browser to authenticate with Evernote');
-    console.error('and save the token for future use.');
-    console.error('═══════════════════════════════════════════════════════════');
-    
-    throw new Error('Authentication required. Please run "npm run auth" first.');
+    // Different messages for Claude Code vs Claude Desktop
+    if (this.isClaudeCode) {
+      // In Claude Code, suggest using /mcp command
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('🔐 AUTHENTICATION REQUIRED');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('');
+      console.error('No Evernote authentication token found.');
+      console.error('');
+      console.error('To authenticate in Claude Code:');
+      console.error('1. Type: /mcp');
+      console.error('2. Select "Evernote"');
+      console.error('3. Choose "Authenticate"');
+      console.error('');
+      console.error('Claude Code will handle the OAuth flow automatically.');
+      console.error('═══════════════════════════════════════════════════════════');
+      
+      throw new Error('Authentication required. Use /mcp command in Claude Code to authenticate.');
+    } else {
+      // In Claude Desktop or other environments
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('🔐 AUTHENTICATION REQUIRED');
+      console.error('═══════════════════════════════════════════════════════════');
+      console.error('');
+      console.error('No Evernote authentication token found.');
+      console.error('');
+      console.error('Please run the authentication setup first:');
+      console.error('');
+      console.error('  npm run auth');
+      console.error('');
+      console.error('Or if running from source:');
+      console.error('');
+      console.error('  npx tsx src/auth-standalone.ts');
+      console.error('');
+      console.error('This will open your browser to authenticate with Evernote');
+      console.error('and save the token for future use.');
+      console.error('═══════════════════════════════════════════════════════════');
+      
+      throw new Error('Authentication required. Please run "npm run auth" first.');
+    }
   }
 
   private async loadToken(): Promise<OAuthTokens | null> {
