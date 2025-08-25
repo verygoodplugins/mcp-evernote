@@ -36,10 +36,17 @@ const oauth = new EvernoteOAuth(evernoteConfig);
 let api: EvernoteAPI | null = null;
 
 // Initialize API on first use
+let apiInitError: string | null = null;
 async function ensureAPI(): Promise<EvernoteAPI> {
   if (!api) {
-    const { client, tokens } = await oauth.getAuthenticatedClient();
-    api = new EvernoteAPI(client, tokens);
+    try {
+      const { client, tokens } = await oauth.getAuthenticatedClient();
+      api = new EvernoteAPI(client, tokens);
+      apiInitError = null;
+    } catch (error: any) {
+      apiInitError = error.message || 'Failed to initialize Evernote API';
+      throw error;
+    }
   }
   return api;
 }
@@ -235,6 +242,20 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'evernote_health_check',
+    description: 'Check the health and status of the Evernote MCP server',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        verbose: {
+          type: 'boolean',
+          description: 'Include detailed diagnostic information',
+          default: false,
+        },
+      },
     },
   },
 ];
@@ -497,6 +518,152 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 },
                 quota: quota,
               }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_health_check': {
+        const { verbose = false } = args as any;
+        
+        // Basic server info
+        const healthStatus: any = {
+          server: {
+            name: 'mcp-evernote',
+            version: '1.0.0',
+            status: 'running',
+            environment: ENVIRONMENT,
+            timestamp: new Date().toISOString(),
+          },
+          configuration: {
+            consumerKeySet: !!CONSUMER_KEY,
+            consumerSecretSet: !!CONSUMER_SECRET,
+            environment: ENVIRONMENT,
+            isClaudeCode: oauth['isClaudeCode'],
+          },
+          authentication: {
+            status: 'checking',
+            apiInitialized: !!api,
+            lastError: apiInitError,
+          },
+        };
+
+        // Try to check authentication status
+        try {
+          // Check if we have tokens without initializing API
+          const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
+          const hasOAuthToken = !!process.env.OAUTH_TOKEN;
+          
+          // Try to load token file
+          let hasTokenFile = false;
+          let tokenFileInfo: any = null;
+          try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const tokenPath = path.join(process.cwd(), '.evernote-token.json');
+            const tokenData = await fs.readFile(tokenPath, 'utf-8');
+            const token = JSON.parse(tokenData);
+            hasTokenFile = true;
+            tokenFileInfo = {
+              exists: true,
+              hasToken: !!token.token,
+              hasNoteStoreUrl: !!token.noteStoreUrl,
+              userId: token.userId,
+              expires: token.expires ? new Date(token.expires).toISOString() : null,
+              isExpired: token.expires ? token.expires < Date.now() : false,
+            };
+          } catch (e) {
+            tokenFileInfo = { exists: false, error: (e as Error).message };
+          }
+
+          healthStatus.authentication = {
+            status: 'checked',
+            apiInitialized: !!api,
+            hasEnvToken,
+            hasOAuthToken,
+            hasTokenFile,
+            tokenFileInfo: verbose ? tokenFileInfo : undefined,
+            lastError: apiInitError,
+          };
+
+          // If API is already initialized, test it
+          if (api) {
+            try {
+              const user = await api.getUser();
+              healthStatus.authentication.status = 'authenticated';
+              healthStatus.authentication.user = {
+                id: user.id,
+                username: user.username,
+              };
+              healthStatus.status = 'healthy';
+            } catch (e) {
+              healthStatus.authentication.status = 'api_error';
+              healthStatus.authentication.apiError = (e as Error).message;
+              healthStatus.status = 'unhealthy';
+            }
+          } else {
+            // Try to initialize API if we haven't yet
+            try {
+              await ensureAPI();
+              healthStatus.authentication.status = 'authenticated';
+              healthStatus.authentication.apiInitialized = true;
+              healthStatus.status = 'healthy';
+              
+              // Get user info if successful
+              try {
+                const user = await api!.getUser();
+                healthStatus.authentication.user = {
+                  id: user.id,
+                  username: user.username,
+                };
+              } catch (e) {
+                // API initialized but can't get user
+                healthStatus.authentication.apiError = (e as Error).message;
+              }
+            } catch (e) {
+              healthStatus.authentication.status = 'not_authenticated';
+              healthStatus.authentication.initError = (e as Error).message;
+              healthStatus.status = 'needs_auth';
+            }
+          }
+        } catch (error: any) {
+          healthStatus.authentication.error = error.message;
+          healthStatus.status = 'error';
+        }
+
+        // Add diagnostic information if verbose
+        if (verbose) {
+          healthStatus.diagnostics = {
+            cwd: process.cwd(),
+            nodeVersion: process.version,
+            platform: process.platform,
+            env: {
+              MCP_TRANSPORT: process.env.MCP_TRANSPORT || 'not set',
+              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || 'not set',
+              hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
+              hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
+            },
+          };
+        }
+
+        // Overall status determination
+        if (!healthStatus.status) {
+          if (healthStatus.authentication.status === 'authenticated') {
+            healthStatus.status = 'healthy';
+          } else if (healthStatus.authentication.hasTokenFile || 
+                     healthStatus.authentication.hasEnvToken || 
+                     healthStatus.authentication.hasOAuthToken) {
+            healthStatus.status = 'auth_issue';
+          } else {
+            healthStatus.status = 'needs_setup';
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(healthStatus, null, 2),
             },
           ],
         };

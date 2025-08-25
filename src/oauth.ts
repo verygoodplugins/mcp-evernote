@@ -94,14 +94,30 @@ export class EvernoteOAuth {
       const data = await fs.readFile(this.tokenFile, 'utf-8');
       const tokens = JSON.parse(data) as OAuthTokens;
       
+      // Validate token structure
+      if (!tokens.token) {
+        console.error('Invalid token file: missing token field');
+        return null;
+      }
+      
       // Check if token is expired (if expiration is set)
       if (tokens.expires && tokens.expires < Date.now()) {
         console.error('Token expired, need to re-authenticate');
         return null;
       }
       
+      // Log if noteStoreUrl is missing (will be fetched later)
+      if (!tokens.noteStoreUrl) {
+        console.error('Token file missing noteStoreUrl, will fetch from API');
+      }
+      
       return tokens;
-    } catch (error) {
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // File doesn't exist, that's expected on first run
+        return null;
+      }
+      console.error('Failed to load token file:', error.message);
       return null;
     }
   }
@@ -125,6 +141,27 @@ export class EvernoteOAuth {
       sandbox: this.config.sandbox,
       china: this.config.china || false
     });
+
+    // If noteStoreUrl is missing, we need to get it from the UserStore
+    if (!tokens.noteStoreUrl) {
+      try {
+        const userStore = authenticatedClient.getUserStore();
+        const noteStoreUrl = await userStore.getNoteStoreUrl();
+        tokens.noteStoreUrl = noteStoreUrl;
+        
+        // Save the updated token with noteStoreUrl
+        if (!this.isClaudeCode && !process.env.EVERNOTE_ACCESS_TOKEN) {
+          try {
+            await fs.writeFile(this.tokenFile, JSON.stringify(tokens, null, 2));
+          } catch (error) {
+            console.error('Failed to update token file with noteStoreUrl:', error);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to get noteStoreUrl:', error);
+        throw new Error('Failed to get noteStoreUrl from Evernote. Token may be invalid.');
+      }
+    }
 
     return {
       client: authenticatedClient,

@@ -71,7 +71,8 @@ export class EvernoteAPI {
   }
 
   async searchNotes(params: SearchParameters): Promise<any> {
-    const filter = new Evernote.NoteStore.NoteFilter();
+    const NoteStore = Evernote.NoteStore || (Evernote as any).default?.NoteStore;
+    const filter = new NoteStore.NoteFilter();
     
     if (params.words) filter.words = params.words;
     if (params.notebookGuid) filter.notebookGuid = params.notebookGuid;
@@ -80,7 +81,7 @@ export class EvernoteAPI {
     if (params.inactive !== undefined) filter.inactive = params.inactive;
     if (params.emphasized) filter.emphasized = params.emphasized;
 
-    const spec = new Evernote.NoteStore.NotesMetadataResultSpec();
+    const spec = new NoteStore.NotesMetadataResultSpec();
     spec.includeTitle = true;
     spec.includeContentLength = true;
     spec.includeCreated = true;

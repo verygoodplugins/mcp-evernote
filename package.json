@@ -33,6 +33,9 @@
   ],
   "author": "Very Good Plugins",
   "license": "GPL-3.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/verygoodplugins/mcp-evernote.git"
