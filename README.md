@@ -1,6 +1,12 @@
 # MCP Evernote Server
 
+[![Version](https://img.shields.io/npm/v/@verygoodplugins/mcp-evernote)](https://www.npmjs.com/package/@verygoodplugins/mcp-evernote)
+[![License](https://img.shields.io/npm/l/@verygoodplugins/mcp-evernote)](LICENSE)
+
 A Model Context Protocol (MCP) server that provides seamless integration with Evernote for note management, organization, and knowledge capture. Works with both Claude Code and Claude Desktop.
+
+**Version:** 1.0.0  
+**Release Date:** August 29th, 2025
 
 ## Installation Requirements
 
@@ -15,16 +21,27 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 - **Repository Download**: Not required
 - **Setup**: Single command installation
 
-## Features
+## Current Status
 
-- 🔐 **OAuth Authentication** - Secure OAuth flow with automatic handling in Claude Code
-- 📝 **Note Management** - Create, read, update, and delete notes
-- 📚 **Notebook Organization** - Manage notebooks and stacks
-- 🏷️ **Tag System** - Create and manage tags for better organization
-- 🔍 **Advanced Search** - Search notes using Evernote's powerful search syntax
-- 💾 **Memory Integration** - Optional sync with MCP memory service for knowledge persistence
-- 🔄 **Real-time Sync** - Keep your notes synchronized across all devices
-- 🤖 **Smart Setup** - Automatic environment detection and configuration
+### ✅ Working Features
+
+- 🔐 **OAuth Authentication** - Interactive setup for Claude Desktop, automatic for Claude Code
+- 📝 **Note Operations**
+  - Create notes with plain text or markdown content
+  - Read and retrieve note contents
+  - Update existing notes
+  - Delete notes
+- 📚 **Notebook Management**
+  - List all notebooks
+  - Create new notebooks
+  - Organize with stacks
+- 🏷️ **Tag System**
+  - List all tags
+  - Create new tags
+  - Hierarchical tag support
+- 🔍 **Advanced Search** - Full Evernote search syntax support
+- 👤 **User Info** - Get account details and quota usage
+- 🤖 **Smart Setup** - Interactive credential prompts and environment detection
 
 ## Quick Start
 
@@ -447,6 +464,13 @@ GPL-3.0 - See [LICENSE](LICENSE) file for details.
 
 ## Roadmap
 
+### Near Term
+- [ ] **Tag Management** - Add/remove tags from existing notes
+- [ ] **ENML ↔ Markdown Converter** - Bidirectional conversion between Evernote's ENML format and Markdown
+- [ ] **Real-time Sync Hooks** - Detect changes made via Evernote desktop/mobile apps
+- [ ] **Database Monitoring** - Watch Evernote DB service for live updates
+
+### Future Enhancements
 - [ ] Web clipper functionality
 - [ ] Rich text editing support
 - [ ] File attachment handling

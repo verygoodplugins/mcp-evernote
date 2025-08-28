@@ -40,6 +40,9 @@ Thumbs.db
 *.swo
 *~
 
+# Claude settings
+.claude/
+
 # OAuth tokens and credentials
 tokens/
 *.token.json
