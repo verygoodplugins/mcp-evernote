@@ -18,7 +18,8 @@ export class EvernoteAPI {
 
   // Note operations
   async createNote(noteContent: NoteContent): Promise<any> {
-    const note = new Evernote.Types.Note();
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const note = new EvernoteModule.Types.Note();
     note.title = noteContent.title;
     
     // Build ENML content
@@ -39,17 +40,17 @@ export class EvernoteAPI {
     }
 
     if (noteContent.attributes) {
-      note.attributes = new Evernote.Types.NoteAttributes(noteContent.attributes);
+      note.attributes = new EvernoteModule.Types.NoteAttributes(noteContent.attributes);
     }
 
     if (noteContent.resources && noteContent.resources.length > 0) {
       note.resources = noteContent.resources.map(r => {
-        const resource = new Evernote.Types.Resource();
-        resource.data = new Evernote.Types.Data();
+        const resource = new EvernoteModule.Types.Resource();
+        resource.data = new EvernoteModule.Types.Data();
         resource.data.body = r.data;
         resource.mime = r.mimeType;
         if (r.attributes) {
-          resource.attributes = new Evernote.Types.ResourceAttributes(r.attributes);
+          resource.attributes = new EvernoteModule.Types.ResourceAttributes(r.attributes);
         }
         return resource;
       });
@@ -71,8 +72,9 @@ export class EvernoteAPI {
   }
 
   async searchNotes(params: SearchParameters): Promise<any> {
-    const NoteStore = Evernote.NoteStore || (Evernote as any).default?.NoteStore;
-    const filter = new NoteStore.NoteFilter();
+    // Handle ES module import where Evernote exports are under .default
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const filter = new EvernoteModule.NoteStore.NoteFilter();
     
     if (params.words) filter.words = params.words;
     if (params.notebookGuid) filter.notebookGuid = params.notebookGuid;
@@ -81,7 +83,7 @@ export class EvernoteAPI {
     if (params.inactive !== undefined) filter.inactive = params.inactive;
     if (params.emphasized) filter.emphasized = params.emphasized;
 
-    const spec = new NoteStore.NotesMetadataResultSpec();
+    const spec = new EvernoteModule.NoteStore.NotesMetadataResultSpec();
     spec.includeTitle = true;
     spec.includeContentLength = true;
     spec.includeCreated = true;
@@ -116,7 +118,8 @@ export class EvernoteAPI {
   }
 
   async createNotebook(name: string, stack?: string): Promise<any> {
-    const notebook = new Evernote.Types.Notebook();
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const notebook = new EvernoteModule.Types.Notebook();
     notebook.name = name;
     if (stack) {
       notebook.stack = stack;
@@ -148,7 +151,8 @@ export class EvernoteAPI {
   }
 
   async createTag(name: string, parentGuid?: string): Promise<any> {
-    const tag = new Evernote.Types.Tag();
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const tag = new EvernoteModule.Types.Tag();
     tag.name = name;
     if (parentGuid) {
       tag.parentGuid = parentGuid;
