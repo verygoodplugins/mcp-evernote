@@ -2,6 +2,18 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with Evernote for note management, organization, and knowledge capture. Works with both Claude Code and Claude Desktop.
 
+## Installation Requirements
+
+### For Claude Desktop Users:
+- **OAuth Authentication Required**: Yes, you need to run the auth command once
+- **Repository Download**: No, you can use npx directly from npm
+- **Simple Setup**: Just two commands - authenticate and configure
+
+### For Claude Code Users:
+- **OAuth Authentication**: Handled automatically via `/mcp` command
+- **Repository Download**: Not required
+- **Setup**: Single command installation
+
 ## Features
 
 - 🔐 **OAuth Authentication** - Secure OAuth flow with automatic handling in Claude Code
@@ -15,42 +27,47 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 
 ## Quick Start
 
-### Automatic Setup (Recommended)
+### Installation Methods
+
+#### Option 1: Using NPX (No Installation Required)
+
+The simplest way - no need to install anything globally:
 
 ```bash
-npm install @verygoodplugins/mcp-evernote
-npm run setup
+# For Claude Desktop - Run authentication
+npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
+
+# For Claude Code - Just add the server
+claude mcp add evernote "npx @verygoodplugins/mcp-evernote"
 ```
 
-The setup wizard will:
-1. Detect your environment (Claude Code or Claude Desktop)
-2. Guide you through the appropriate installation
-3. Handle authentication automatically
+#### Option 2: Global Installation
 
-### Manual Installation
-
-#### For Claude Code
+Install once, use anywhere:
 
 ```bash
 # Install globally
 npm install -g @verygoodplugins/mcp-evernote
 
-# Add to Claude Code
-claude mcp add evernote "npx @verygoodplugins/mcp-evernote"
+# For Claude Desktop - Run authentication
+mcp-evernote-auth
 
-# Authenticate using /mcp command in Claude Code
+# For Claude Code - Add the server
+claude mcp add evernote "mcp-evernote"
 ```
 
-#### For Claude Desktop
+#### Option 3: Local Development
+
+For contributing or customization:
 
 ```bash
-# Install
-npm install @verygoodplugins/mcp-evernote
+# Clone and install
+git clone https://github.com/verygoodplugins/mcp-evernote.git
+cd mcp-evernote
+npm install
 
-# Authenticate
-npm run auth
-
-# Configure in Claude Desktop settings
+# Run setup wizard
+npm run setup
 ```
 
 ## Configuration
@@ -80,12 +97,7 @@ OAUTH_CALLBACK_PORT=3000        # Port for OAuth callback
 <details>
 <summary><b>Claude Code Configuration</b></summary>
 
-#### Automatic Installation
-```bash
-npm run setup:claude
-```
-
-#### Manual Installation
+#### Quick Setup (Using NPX)
 ```bash
 claude mcp add evernote "npx @verygoodplugins/mcp-evernote" \
   --env EVERNOTE_CONSUMER_KEY=your-key \
@@ -99,16 +111,26 @@ claude mcp add evernote "npx @verygoodplugins/mcp-evernote" \
 4. Follow the browser OAuth flow
 5. Tokens are stored and refreshed automatically by Claude Code
 
+**Note:** Claude Code handles OAuth automatically - no manual token management needed!
+
 </details>
 
 <details>
 <summary><b>Claude Desktop Configuration</b></summary>
 
 #### Step 1: Authenticate
+
+Using NPX (no installation required):
 ```bash
-npm run auth
+npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 ```
-This opens your browser for OAuth and saves the token locally.
+
+Or if installed globally:
+```bash
+mcp-evernote-auth
+```
+
+This opens your browser for OAuth and saves the token to `.evernote-token.json`.
 
 #### Step 2: Add to Configuration
 
@@ -131,6 +153,21 @@ This opens your browser for OAuth and saves the token locally.
 }
 ```
 
+**Or** if installed globally:
+```json
+{
+  "mcpServers": {
+    "evernote": {
+      "command": "mcp-evernote",
+      "env": {
+        "EVERNOTE_CONSUMER_KEY": "your-consumer-key",
+        "EVERNOTE_CONSUMER_SECRET": "your-consumer-secret"
+      }
+    }
+  }
+}
+```
+
 </details>
 
 ## Authentication Methods
@@ -139,7 +176,7 @@ This opens your browser for OAuth and saves the token locally.
 Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code.
 
 ### 2. Claude Desktop (Manual)
-Run `npm run auth` to authenticate via browser. Token saved to `.evernote-token.json`.
+Run `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. Token saved to `.evernote-token.json`.
 
 ### 3. Environment Variables (CI/CD)
 ```env
@@ -300,7 +337,12 @@ Sync my "Important Concepts" notebook to memory for long-term retention
 #### "Authentication required" error in Claude Desktop
 This means you haven't authenticated yet. Run the authentication script:
 ```bash
-npm run auth
+npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
+```
+
+Or if installed globally:
+```bash
+mcp-evernote-auth
 ```
 
 #### OAuth callback fails
@@ -312,7 +354,7 @@ If the OAuth callback doesn't work:
 #### Token expired
 If your token expires:
 1. Delete `.evernote-token.json`
-2. Run `npm run auth` again
+2. Run `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth` again
 3. Restart Claude Desktop
 
 ### Connection Errors
