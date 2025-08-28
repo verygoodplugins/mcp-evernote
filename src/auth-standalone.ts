@@ -10,24 +10,95 @@ import open from 'open';
 import fs from 'fs/promises';
 import path from 'path';
 import { config } from 'dotenv';
+import * as readline from 'readline/promises';
+import { stdin, stdout } from 'process';
 
 // Load environment variables
 config();
 
-const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
-const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
-const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || 'production';
-const CALLBACK_PORT = parseInt(process.env.OAUTH_CALLBACK_PORT || '3000');
+const tokenFile = path.join(process.cwd(), '.evernote-token.json');
+const credentialsFile = path.join(process.cwd(), '.evernote-credentials.json');
 
-if (!CONSUMER_KEY || !CONSUMER_SECRET) {
-  console.error('❌ Missing required environment variables: EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET');
-  console.error('Please create a .env file with your Evernote API credentials');
-  process.exit(1);
+interface Credentials {
+  consumerKey: string;
+  consumerSecret: string;
+  environment: string;
+  callbackPort: number;
 }
 
-const tokenFile = path.join(process.cwd(), '.evernote-token.json');
+async function getCredentials(): Promise<Credentials> {
+  // Check environment variables first
+  if (process.env.EVERNOTE_CONSUMER_KEY && process.env.EVERNOTE_CONSUMER_SECRET) {
+    return {
+      consumerKey: process.env.EVERNOTE_CONSUMER_KEY,
+      consumerSecret: process.env.EVERNOTE_CONSUMER_SECRET,
+      environment: process.env.EVERNOTE_ENVIRONMENT || 'production',
+      callbackPort: parseInt(process.env.OAUTH_CALLBACK_PORT || '3000')
+    };
+  }
 
-async function checkExistingToken() {
+  // Check for saved credentials file
+  try {
+    const data = await fs.readFile(credentialsFile, 'utf-8');
+    const saved = JSON.parse(data);
+    console.log('✅ Found saved credentials');
+    return saved;
+  } catch (error) {
+    // No saved credentials, need to prompt
+  }
+
+  // Prompt for credentials
+  console.log('\n🔐 Evernote API Credentials Required');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  console.log('To get your API credentials:');
+  console.log('1. Visit https://dev.evernote.com/');
+  console.log('2. Create a new application');
+  console.log('3. Copy your Consumer Key and Consumer Secret\n');
+
+  const rl = readline.createInterface({ input: stdin, output: stdout });
+
+  try {
+    const consumerKey = await rl.question('Enter your Consumer Key: ');
+    if (!consumerKey.trim()) {
+      throw new Error('Consumer Key is required');
+    }
+
+    // For security, we could hide the secret input, but Node.js readline doesn't support it natively
+    // Using a simple prompt for now
+    const consumerSecret = await rl.question('Enter your Consumer Secret: ');
+    if (!consumerSecret.trim()) {
+      throw new Error('Consumer Secret is required');
+    }
+
+    const envAnswer = await rl.question('Environment (production/sandbox) [production]: ');
+    const environment = envAnswer.trim() || 'production';
+
+    const portAnswer = await rl.question('OAuth callback port [3000]: ');
+    const callbackPort = parseInt(portAnswer.trim() || '3000');
+
+    const saveAnswer = await rl.question('\nSave credentials for future use? (y/N): ');
+    const shouldSave = saveAnswer.toLowerCase() === 'y';
+
+    const credentials: Credentials = {
+      consumerKey: consumerKey.trim(),
+      consumerSecret: consumerSecret.trim(),
+      environment,
+      callbackPort
+    };
+
+    if (shouldSave) {
+      await fs.writeFile(credentialsFile, JSON.stringify(credentials, null, 2));
+      console.log('✅ Credentials saved to .evernote-credentials.json');
+      console.log('⚠️  Remember to add .evernote-credentials.json to your .gitignore!');
+    }
+
+    return credentials;
+  } finally {
+    rl.close();
+  }
+}
+
+async function checkExistingToken(environment: string) {
   try {
     const data = await fs.readFile(tokenFile, 'utf-8');
     const tokens = JSON.parse(data);
@@ -37,39 +108,36 @@ async function checkExistingToken() {
       return null;
     }
     
-    console.log('✅ Found existing valid token');
+    console.log('\n✅ Found existing valid token');
     console.log('Token details:');
     console.log('  - User ID:', tokens.userId);
     console.log('  - Expires:', tokens.expires ? new Date(tokens.expires).toLocaleString() : 'Never');
-    console.log('  - Environment:', ENVIRONMENT);
+    console.log('  - Environment:', environment);
     
-    const readline = await import('readline');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
+    const rl = readline.createInterface({ input: stdin, output: stdout });
     
-    return new Promise((resolve) => {
-      rl.question('\nDo you want to re-authenticate? (y/N): ', (answer) => {
-        rl.close();
-        if (answer.toLowerCase() === 'y') {
-          resolve(null);
-        } else {
-          console.log('✅ Using existing token');
-          resolve(tokens);
-        }
-      });
-    });
+    try {
+      const answer = await rl.question('\nDo you want to re-authenticate? (y/N): ');
+      if (answer.toLowerCase() === 'y') {
+        return null;
+      } else {
+        console.log('✅ Using existing token');
+        return tokens;
+      }
+    } finally {
+      rl.close();
+    }
   } catch (error) {
     return null;
   }
 }
 
-async function performOAuth() {
-  const client = new Evernote.Client({
-    consumerKey: CONSUMER_KEY,
-    consumerSecret: CONSUMER_SECRET,
-    sandbox: ENVIRONMENT === 'sandbox',
+async function performOAuth(credentials: Credentials) {
+  const EvernoteModule = (Evernote as any).default || Evernote;
+  const client = new EvernoteModule.Client({
+    consumerKey: credentials.consumerKey,
+    consumerSecret: credentials.consumerSecret,
+    sandbox: credentials.environment === 'sandbox',
     china: false
   });
 
@@ -77,7 +145,7 @@ async function performOAuth() {
     const app = express();
     let server: any;
     
-    const callbackUrl = `http://localhost:${CALLBACK_PORT}/oauth/callback`;
+    const callbackUrl = `http://localhost:${credentials.callbackPort}/oauth/callback`;
     
     console.log('\n🔐 Starting OAuth authentication flow...');
     console.log(`📡 Callback URL: ${callbackUrl}`);
@@ -98,161 +166,120 @@ async function performOAuth() {
         console.log('\n📥 Received OAuth callback');
         
         if (!oauth_verifier) {
-          res.send(`
-            <html>
-              <head><title>Authorization Cancelled</title></head>
-              <body style="font-family: system-ui; padding: 40px; text-align: center;">
-                <h1>❌ Authorization Cancelled</h1>
-                <p>You cancelled the authorization. Please run the script again if you want to authenticate.</p>
-              </body>
-            </html>
-          `);
+          res.send('❌ OAuth verification failed - no verifier received');
           server.close();
-          reject(new Error('Authorization cancelled by user'));
+          reject(new Error('OAuth verification failed'));
           return;
         }
-
-        console.log('🔄 Exchanging for access token...');
         
-        // Step 3: Exchange for access token
+        // Step 3: Get access token
         client.getAccessToken(
           oauthToken,
           oauthTokenSecret,
           oauth_verifier as string,
-          async (error: any, accessToken: string, accessTokenSecret: string, results: any) => {
+          async (error: any, accessToken: string, _accessTokenSecret: string, results: any) => {
             if (error) {
+              res.send(`❌ Failed to get access token: ${error.message}`);
+              server.close();
+              reject(error);
+              return;
+            }
+            
+            console.log('✅ Obtained access token');
+            
+            // Get note store URL
+            const authenticatedClient = new EvernoteModule.Client({
+              token: accessToken,
+              sandbox: credentials.environment === 'sandbox',
+              china: false
+            });
+            
+            const noteStoreUrl = authenticatedClient.getNoteStore().url;
+            
+            // Get user info to verify token
+            try {
+              const userStore = authenticatedClient.getUserStore();
+              const user = await userStore.getUser();
+              
+              const tokenData = {
+                accessToken,
+                noteStoreUrl,
+                webApiUrlPrefix: results.edam_webApiUrlPrefix,
+                userId: results.edam_userId,
+                expires: results.edam_expires || null,
+                username: user.username,
+                environment: credentials.environment
+              };
+              
+              // Save token
+              await fs.writeFile(tokenFile, JSON.stringify(tokenData, null, 2));
+              
               res.send(`
                 <html>
-                  <head><title>Authentication Failed</title></head>
-                  <body style="font-family: system-ui; padding: 40px; text-align: center;">
-                    <h1>❌ Authentication Failed</h1>
-                    <p>Failed to get access token: ${error.message}</p>
+                  <head>
+                    <style>
+                      body { font-family: -apple-system, system-ui, sans-serif; padding: 40px; text-align: center; }
+                      h1 { color: #00a82d; }
+                      .success { background: #f0f9f0; padding: 20px; border-radius: 8px; margin: 20px 0; }
+                      code { background: #e8e8e8; padding: 4px 8px; border-radius: 4px; }
+                    </style>
+                  </head>
+                  <body>
+                    <h1>✅ Authentication Successful!</h1>
+                    <div class="success">
+                      <p>Authenticated as: <strong>${user.username}</strong></p>
+                      <p>Token saved to: <code>.evernote-token.json</code></p>
+                      <p>Environment: <strong>${credentials.environment}</strong></p>
+                    </div>
+                    <p>You can close this window and return to your terminal.</p>
                   </body>
                 </html>
               `);
+              
+              console.log('\n✅ Authentication complete!');
+              console.log('  - User:', user.username);
+              console.log('  - User ID:', tokenData.userId);
+              console.log('  - Token saved to:', tokenFile);
+              if (tokenData.expires) {
+                console.log('  - Expires:', new Date(tokenData.expires).toLocaleString());
+              }
+              
               server.close();
-              reject(new Error(`Failed to get access token: ${error.message}`));
-              return;
+              resolve(tokenData);
+            } catch (error: any) {
+              res.send(`❌ Failed to verify token: ${error.message}`);
+              server.close();
+              reject(error);
             }
-
-            const tokens = {
-              token: accessToken,
-              tokenSecret: accessTokenSecret,
-              noteStoreUrl: results.edam_noteStoreUrl,
-              webApiUrlPrefix: results.edam_webApiUrlPrefix,
-              userId: results.edam_userId,
-              expires: results.edam_expires || 0
-            };
-
-            // Save token to file
-            await fs.writeFile(tokenFile, JSON.stringify(tokens, null, 2));
-            
-            console.log('✅ Access token obtained and saved!');
-            
-            res.send(`
-              <html>
-                <head>
-                  <title>Authentication Successful</title>
-                  <style>
-                    body {
-                      font-family: system-ui, -apple-system, sans-serif;
-                      padding: 40px;
-                      max-width: 600px;
-                      margin: 0 auto;
-                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                      min-height: 100vh;
-                      display: flex;
-                      align-items: center;
-                      justify-content: center;
-                    }
-                    .container {
-                      background: white;
-                      border-radius: 16px;
-                      padding: 40px;
-                      box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-                      text-align: center;
-                    }
-                    h1 { color: #2d3748; margin-bottom: 16px; }
-                    .success-icon {
-                      font-size: 64px;
-                      margin-bottom: 20px;
-                    }
-                    p { color: #4a5568; line-height: 1.6; margin: 16px 0; }
-                    .token-info {
-                      background: #f7fafc;
-                      border: 1px solid #e2e8f0;
-                      border-radius: 8px;
-                      padding: 16px;
-                      margin: 20px 0;
-                      text-align: left;
-                    }
-                    .token-info strong { color: #2d3748; }
-                    .close-hint {
-                      color: #718096;
-                      font-size: 14px;
-                      margin-top: 24px;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <div class="container">
-                    <div class="success-icon">✅</div>
-                    <h1>Authentication Successful!</h1>
-                    <p>Your Evernote account has been successfully connected to the MCP server.</p>
-                    
-                    <div class="token-info">
-                      <p><strong>User ID:</strong> ${tokens.userId}</p>
-                      <p><strong>Environment:</strong> ${ENVIRONMENT}</p>
-                      <p><strong>Token Expires:</strong> ${tokens.expires ? new Date(tokens.expires).toLocaleString() : 'Never'}</p>
-                      <p><strong>Token Saved To:</strong> ${tokenFile}</p>
-                    </div>
-                    
-                    <p>You can now use the Evernote MCP server in Claude Desktop!</p>
-                    <p class="close-hint">This window will close automatically in 5 seconds...</p>
-                  </div>
-                  <script>
-                    setTimeout(() => {
-                      window.close();
-                      // Fallback if window.close() doesn't work
-                      document.body.innerHTML = '<div class="container"><h2>You can close this window now</h2></div>';
-                    }, 5000);
-                  </script>
-                </body>
-              </html>
-            `);
-            
-            setTimeout(() => {
-              server.close();
-              resolve(tokens);
-            }, 1000);
           }
         );
       });
-
-      // Start the callback server
-      server = app.listen(CALLBACK_PORT, () => {
-        console.log(`🌐 OAuth callback server listening on port ${CALLBACK_PORT}`);
+      
+      // Start server
+      server = app.listen(credentials.callbackPort, async () => {
+        console.log(`🌐 OAuth callback server listening on port ${credentials.callbackPort}`);
         
-        // Open authorization URL in browser
-        const authorizeUrl = client.getAuthorizeUrl(oauthToken);
-        console.log(`🌐 Opening browser for authorization...`);
-        console.log(`📎 Authorization URL: ${authorizeUrl}\n`);
+        // Step 3: Get authorization URL and open browser
+        const authUrl = client.getAuthorizeUrl(oauthToken);
+        console.log('\n🌐 Opening browser for authorization...');
+        console.log(`📎 Authorization URL: ${authUrl}\n`);
+        console.log('If the browser doesn\'t open automatically, please visit the URL above.\n');
         
-        open(authorizeUrl).catch(() => {
-          console.log('⚠️  Could not open browser automatically.');
-          console.log('Please open this URL manually in your browser:');
-          console.log(authorizeUrl);
-        });
-      });
-
-      // Add error handling for server
-      server.on('error', (err: any) => {
-        if (err.code === 'EADDRINUSE') {
-          console.error(`❌ Port ${CALLBACK_PORT} is already in use. Please close any other processes using this port or set a different OAUTH_CALLBACK_PORT in your .env file.`);
-        } else {
-          console.error('❌ Server error:', err);
+        try {
+          await open(authUrl);
+        } catch (error) {
+          console.error('⚠️  Could not open browser automatically');
+          console.log(`Please open this URL manually: ${authUrl}`);
         }
-        reject(err);
+      });
+      
+      // Handle server errors
+      server.on('error', (error: any) => {
+        if (error.code === 'EADDRINUSE') {
+          reject(new Error(`Port ${credentials.callbackPort} is already in use. Please specify a different port in OAUTH_CALLBACK_PORT environment variable.`));
+        } else {
+          reject(error);
+        }
       });
     });
   });
@@ -260,49 +287,49 @@ async function performOAuth() {
 
 async function main() {
   console.log('🚀 Evernote MCP Server - Authentication Setup');
-  console.log('=' .repeat(50));
-  console.log(`Environment: ${ENVIRONMENT}`);
-  console.log(`Consumer Key: ${CONSUMER_KEY}`);
-  console.log('=' .repeat(50));
+  console.log('═══════════════════════════════════════════════\n');
   
   try {
+    // Get credentials
+    const credentials = await getCredentials();
+    
     // Check for existing token
-    const existingToken = await checkExistingToken();
+    const existingToken = await checkExistingToken(credentials.environment);
+    
     if (existingToken) {
-      process.exit(0);
+      console.log('\n✅ Authentication is already set up!');
+      console.log('\nYou can now use the Evernote MCP server with Claude Desktop.');
+      return;
     }
     
     // Perform OAuth
-    await performOAuth();
+    await performOAuth(credentials);
     
-    console.log('\n' + '=' .repeat(50));
-    console.log('✅ Authentication Complete!');
-    console.log('=' .repeat(50));
-    console.log('\nYour Evernote MCP server is now ready to use with Claude Desktop.');
-    console.log(`Token saved to: ${tokenFile}`);
-    console.log('\nTo use with Claude Desktop, make sure your config includes:');
-    console.log(`
-{
-  "mcpServers": {
-    "evernote": {
-      "command": "node",
-      "args": ["${path.join(process.cwd(), 'dist', 'index.js')}"]
-    }
-  }
-}
-    `);
+    console.log('\n✅ Setup complete!');
+    console.log('\nNext steps for Claude Desktop:');
+    console.log('1. Add the following to your Claude Desktop config:');
+    console.log('   Location: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)');
+    console.log('             %APPDATA%\\Claude\\claude_desktop_config.json (Windows)\n');
+    console.log(JSON.stringify({
+      mcpServers: {
+        evernote: {
+          command: "npx",
+          args: ["@verygoodplugins/mcp-evernote"],
+          env: {
+            EVERNOTE_CONSUMER_KEY: credentials.consumerKey,
+            EVERNOTE_CONSUMER_SECRET: credentials.consumerSecret,
+            EVERNOTE_ENVIRONMENT: credentials.environment
+          }
+        }
+      }
+    }, null, 2));
+    console.log('\n2. Restart Claude Desktop');
+    console.log('3. Start using Evernote tools in your conversations!');
     
-    process.exit(0);
   } catch (error: any) {
     console.error('\n❌ Authentication failed:', error.message);
     process.exit(1);
   }
 }
-
-// Handle Ctrl+C gracefully
-process.on('SIGINT', () => {
-  console.log('\n\n👋 Authentication cancelled by user');
-  process.exit(0);
-});
 
 main();

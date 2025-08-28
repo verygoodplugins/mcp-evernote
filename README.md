@@ -5,9 +5,10 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 ## Installation Requirements
 
 ### For Claude Desktop Users:
-- **OAuth Authentication Required**: Yes, you need to run the auth command once
+- **OAuth Authentication Required**: Yes, run the auth command once (prompts for API keys)
 - **Repository Download**: No, you can use npx directly from npm
-- **Simple Setup**: Just two commands - authenticate and configure
+- **API Credentials**: The auth script will prompt you for your Evernote API keys
+- **Simple Setup**: Just one command to authenticate and configure
 
 ### For Claude Code Users:
 - **OAuth Authentication**: Handled automatically via `/mcp` command
@@ -76,20 +77,29 @@ npm run setup
 
 1. Visit [Evernote Developers](https://dev.evernote.com/)
 2. Create a new application
-3. Note your Consumer Key and Consumer Secret
+3. Copy your Consumer Key and Consumer Secret
 
-### 2. Set Environment Variables
+### 2. Authentication Options
 
-Create a `.env` file in your project directory:
+#### Interactive Setup (Recommended)
+
+The auth script will prompt you for credentials if not found:
+
+```bash
+# Run authentication - prompts for API keys if needed
+npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
+```
+
+#### Environment Variables (Optional)
+
+For automation, you can set credentials via environment variables:
 
 ```env
-# Required
+# Create .env file (optional)
 EVERNOTE_CONSUMER_KEY=your-consumer-key
 EVERNOTE_CONSUMER_SECRET=your-consumer-secret
-
-# Optional
-EVERNOTE_ENVIRONMENT=production  # or 'sandbox' for testing
-OAUTH_CALLBACK_PORT=3000        # Port for OAuth callback
+EVERNOTE_ENVIRONMENT=production  # or 'sandbox'
+OAUTH_CALLBACK_PORT=3000        # Default: 3000
 ```
 
 ### 3. Configure Your Client
@@ -125,12 +135,17 @@ Using NPX (no installation required):
 npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 ```
 
+The auth script will:
+1. Prompt for your API credentials (if not in environment)
+2. Optionally save credentials for future use
+3. Open your browser for OAuth authentication
+4. Save the token to `.evernote-token.json`
+5. Display the configuration to add to Claude Desktop
+
 Or if installed globally:
 ```bash
 mcp-evernote-auth
 ```
-
-This opens your browser for OAuth and saves the token to `.evernote-token.json`.
 
 #### Step 2: Add to Configuration
 

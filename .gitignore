@@ -40,10 +40,11 @@ Thumbs.db
 *.swo
 *~
 
-# OAuth tokens
+# OAuth tokens and credentials
 tokens/
 *.token.json
 .evernote-token.json
+.evernote-credentials.json
 
 # Temp files
 tmp/
