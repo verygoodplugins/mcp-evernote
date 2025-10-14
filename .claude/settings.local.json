@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "mcp__evernote__evernote_get_user_info",
+      "mcp__evernote__evernote_health_check",
+      "mcp__evernote__evernote_list_tags",
+      "mcp__evernote__evernote_create_note",
+      "Read(/private/tmp/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

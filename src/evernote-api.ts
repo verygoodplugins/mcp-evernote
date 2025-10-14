@@ -1,10 +1,17 @@
 import * as Evernote from 'evernote';
-import { 
-  NoteContent, 
-  SearchParameters, 
-  NotebookInfo, 
+import { createHash } from 'crypto';
+import {
+  markdownToENML,
+  enmlToMarkdown,
+  MarkdownAttachment,
+  MarkdownExistingResource,
+} from './markdown.js';
+import {
+  NoteContent,
+  SearchParameters,
+  NotebookInfo,
   Tag,
-  OAuthTokens 
+  OAuthTokens,
 } from './types.js';
 
 export class EvernoteAPI {
@@ -21,20 +28,14 @@ export class EvernoteAPI {
     const EvernoteModule = (Evernote as any).default || Evernote;
     const note = new EvernoteModule.Types.Note();
     note.title = noteContent.title;
-    
-    // Build ENML content
-    let enmlContent = '<?xml version="1.0" encoding="UTF-8"?>';
-    enmlContent += '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">';
-    enmlContent += '<en-note>';
-    enmlContent += this.convertToENML(noteContent.content);
-    enmlContent += '</en-note>';
-    
-    note.content = enmlContent;
-    
+
+    const conversion = this.convertMarkdownToENML(noteContent.content);
+    note.content = this.wrapEnml(conversion.enml);
+
     if (noteContent.notebookGuid) {
       note.notebookGuid = noteContent.notebookGuid;
     }
-    
+
     if (noteContent.tagNames && noteContent.tagNames.length > 0) {
       note.tagNames = noteContent.tagNames;
     }
@@ -43,17 +44,26 @@ export class EvernoteAPI {
       note.attributes = new EvernoteModule.Types.NoteAttributes(noteContent.attributes);
     }
 
-    if (noteContent.resources && noteContent.resources.length > 0) {
-      note.resources = noteContent.resources.map(r => {
-        const resource = new EvernoteModule.Types.Resource();
-        resource.data = new EvernoteModule.Types.Data();
-        resource.data.body = r.data;
-        resource.mime = r.mimeType;
-        if (r.attributes) {
-          resource.attributes = new EvernoteModule.Types.ResourceAttributes(r.attributes);
-        }
-        return resource;
-      });
+    const resources: any[] = [];
+
+    const attachmentResources = this.buildResourcesFromAttachments(
+      conversion.attachments,
+      EvernoteModule
+    );
+    if (attachmentResources.length > 0) {
+      resources.push(...attachmentResources);
+    }
+
+    const explicitResources = this.buildExplicitResources(
+      noteContent.resources,
+      EvernoteModule
+    );
+    if (explicitResources.length > 0) {
+      resources.push(...explicitResources);
+    }
+
+    if (resources.length > 0) {
+      note.resources = resources;
     }
 
     return await this.noteStore.createNote(note);
@@ -63,8 +73,51 @@ export class EvernoteAPI {
     return await this.noteStore.getNote(guid, withContent, withResources, false, false);
   }
 
-  async updateNote(note: any): Promise<any> {
-    return await this.noteStore.updateNote(note);
+  async updateNote(note: any, retryCount: number = 0): Promise<any> {
+    const maxRetries = 3;
+    const baseDelay = 2000; // 2 seconds base delay
+    
+    try {
+      console.error(`Attempting to update note ${note.guid} with title: ${note.title} (attempt ${retryCount + 1})`);
+      console.error(`Note content length: ${note.content ? note.content.length : 'no content'}`);
+      console.error(`Note tags: ${note.tagNames ? JSON.stringify(note.tagNames) : 'no tags'}`);
+      
+      const result = await this.noteStore.updateNote(note);
+      console.error(`Note update successful for ${note.guid}`);
+      return result;
+    } catch (error: any) {
+      console.error('=== Note Update Failed ===');
+      console.error(`Note GUID: ${note.guid}`);
+      console.error(`Note Title: ${note.title}`);
+      console.error(`Error Name: ${error.name}`);
+      console.error(`Error Message: ${error.message}`);
+      console.error(`Error Code: ${error.errorCode || 'none'}`);
+      console.error(`Error Parameter: ${error.parameter || 'none'}`);
+      console.error(`Attempt: ${retryCount + 1}/${maxRetries + 1}`);
+      console.error('========================');
+      
+      // Handle specific Evernote error codes
+      if (error.errorCode === 19 && retryCount < maxRetries) {
+        // Error code 19: RTE room already open - retry with exponential backoff
+        const delay = baseDelay * Math.pow(2, retryCount);
+        console.error(`RTE room conflict detected. Retrying in ${delay}ms...`);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.updateNote(note, retryCount + 1);
+      }
+      
+      // Enhanced error with context
+      const enhancedError = new Error(`Failed to update note ${note.guid}: ${error.message}`);
+      enhancedError.name = error.name || 'EvernoteUpdateError';
+      (enhancedError as any).originalError = error;
+      (enhancedError as any).noteGuid = note.guid;
+      (enhancedError as any).noteTitle = note.title;
+      (enhancedError as any).errorCode = error.errorCode;
+      (enhancedError as any).parameter = error.parameter;
+      (enhancedError as any).retriesAttempted = retryCount;
+      
+      throw enhancedError;
+    }
   }
 
   async deleteNote(guid: string): Promise<void> {
@@ -75,7 +128,7 @@ export class EvernoteAPI {
     // Handle ES module import where Evernote exports are under .default
     const EvernoteModule = (Evernote as any).default || Evernote;
     const filter = new EvernoteModule.NoteStore.NoteFilter();
-    
+
     if (params.words) filter.words = params.words;
     if (params.notebookGuid) filter.notebookGuid = params.notebookGuid;
     if (params.tagGuids) filter.tagGuids = params.tagGuids;
@@ -113,7 +166,7 @@ export class EvernoteAPI {
       serviceCreated: nb.serviceCreated,
       serviceUpdated: nb.serviceUpdated,
       stack: nb.stack,
-      published: nb.published
+      published: nb.published,
     }));
   }
 
@@ -146,7 +199,7 @@ export class EvernoteAPI {
       guid: tag.guid,
       name: tag.name,
       parentGuid: tag.parentGuid,
-      updateSequenceNum: tag.updateSequenceNum
+      updateSequenceNum: tag.updateSequenceNum,
     }));
   }
 
@@ -182,49 +235,149 @@ export class EvernoteAPI {
   }
 
   // Helper methods
-  private convertToENML(content: string): string {
-    // Convert markdown or plain text to ENML
-    // This is a simplified version - you might want to use a proper markdown parser
-    let enml = content;
-    
-    // Replace newlines with <br/>
-    enml = enml.replace(/\n/g, '<br/>');
-    
-    // Escape special characters
-    enml = enml.replace(/&/g, '&amp;');
-    enml = enml.replace(/</g, '&lt;');
-    enml = enml.replace(/>/g, '&gt;');
-    enml = enml.replace(/"/g, '&quot;');
-    enml = enml.replace(/'/g, '&apos;');
-    
-    // Re-enable br tags
-    enml = enml.replace(/&lt;br\/&gt;/g, '<br/>');
-    
-    return enml;
+  convertMarkdownToENML(content: string, existingResources?: any[]): ReturnType<typeof markdownToENML> {
+    const normalized = this.normalizeExistingResources(existingResources);
+    return markdownToENML(content, { existingResources: normalized });
   }
 
-  convertFromENML(enmlContent: string): string {
-    // Remove XML declaration and DOCTYPE
-    let content = enmlContent.replace(/<\?xml[^>]*\?>/g, '');
-    content = content.replace(/<!DOCTYPE[^>]*>/g, '');
-    
-    // Remove en-note tags
-    content = content.replace(/<\/?en-note[^>]*>/g, '');
-    
-    // Convert br tags to newlines
-    content = content.replace(/<br\s*\/?>/gi, '\n');
-    
-    // Remove other HTML tags (simplified)
-    content = content.replace(/<[^>]*>/g, '');
-    
-    // Unescape HTML entities
-    content = content.replace(/&amp;/g, '&');
-    content = content.replace(/&lt;/g, '<');
-    content = content.replace(/&gt;/g, '>');
-    content = content.replace(/&quot;/g, '"');
-    content = content.replace(/&apos;/g, "'");
-    
-    return content.trim();
+  convertENMLToMarkdown(enmlContent: string, resources?: any[]): string {
+    const normalized = this.normalizeExistingResources(resources);
+    return enmlToMarkdown(enmlContent, { resources: normalized });
+  }
+
+  async applyMarkdownToNote(note: any, markdown: string): Promise<void> {
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const conversion = this.convertMarkdownToENML(markdown, note.resources);
+    note.content = this.wrapEnml(conversion.enml);
+    const attachmentResources = this.buildResourcesFromAttachments(
+      conversion.attachments,
+      EvernoteModule
+    );
+    if (attachmentResources.length > 0) {
+      note.resources = attachmentResources;
+    } else if (note.resources) {
+      delete note.resources;
+    }
+  }
+
+  private wrapEnml(body: string): string {
+    let enmlContent = '<?xml version="1.0" encoding="UTF-8"?>';
+    enmlContent += '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">';
+    enmlContent += `<en-note>${body}</en-note>`;
+    return enmlContent;
+  }
+
+  private buildResourcesFromAttachments(
+    attachments: MarkdownAttachment[],
+    EvernoteModule: any
+  ): any[] {
+    if (!attachments || attachments.length === 0) {
+      return [];
+    }
+
+    const resources: any[] = [];
+    const seen = new Set<string>();
+
+    for (const attachment of attachments) {
+      if (seen.has(attachment.hashHex)) {
+        continue;
+      }
+      seen.add(attachment.hashHex);
+
+      if (attachment.resource) {
+        resources.push(attachment.resource);
+        continue;
+      }
+
+      if (!attachment.data) {
+        continue;
+      }
+
+      const resource = new EvernoteModule.Types.Resource();
+      resource.data = new EvernoteModule.Types.Data();
+      resource.data.body = attachment.data;
+      resource.data.size = attachment.data.length;
+      resource.data.bodyHash = attachment.hash;
+      resource.mime = attachment.mimeType;
+
+      const attrs = new EvernoteModule.Types.ResourceAttributes();
+      if (attachment.filename) {
+        attrs.fileName = attachment.filename;
+      }
+      if (attachment.sourceURL) {
+        attrs.sourceURL = attachment.sourceURL;
+      }
+      if (attachment.filename || attachment.sourceURL) {
+        resource.attributes = attrs;
+      }
+
+      resources.push(resource);
+    }
+
+    return resources;
+  }
+
+  private buildExplicitResources(resources: NoteContent['resources'], EvernoteModule: any): any[] {
+    if (!resources || resources.length === 0) {
+      return [];
+    }
+
+    return resources.map((r) => {
+      const resource = new EvernoteModule.Types.Resource();
+      resource.data = new EvernoteModule.Types.Data();
+      resource.data.body = r.data;
+      resource.data.size = r.data?.length ?? 0;
+      resource.data.bodyHash = r.data ? this.computeHash(r.data) : undefined;
+      resource.mime = r.mimeType;
+
+      if (r.filename || r.attributes) {
+        const attrs = new EvernoteModule.Types.ResourceAttributes(r.attributes || {});
+        if (r.filename) {
+          attrs.fileName = r.filename;
+        }
+        resource.attributes = attrs;
+      }
+
+      return resource;
+    });
+  }
+
+  private normalizeExistingResources(resources: any[] | undefined): MarkdownExistingResource[] {
+    if (!resources || resources.length === 0) {
+      return [];
+    }
+
+    const normalized: MarkdownExistingResource[] = [];
+
+    for (const resource of resources) {
+      if (!resource) {
+        continue;
+      }
+
+      const hashBuffer: Buffer | undefined = resource?.data?.bodyHash
+        ? Buffer.from(resource.data.bodyHash)
+        : resource?.data?.body
+        ? this.computeHash(Buffer.from(resource.data.body))
+        : undefined;
+
+      if (!hashBuffer) {
+        continue;
+      }
+
+      normalized.push({
+        hashHex: hashBuffer.toString('hex'),
+        mimeType: resource.mime,
+        filename: resource?.attributes?.fileName || resource?.attributes?.filename,
+        sourceURL: resource?.attributes?.sourceURL,
+        resource,
+      });
+    }
+
+    return normalized;
+  }
+
+  private computeHash(data: Buffer): Buffer {
+    return createHash('md5').update(data).digest();
   }
 
   // User info
@@ -242,7 +395,7 @@ export class EvernoteAPI {
       uploadLimitNextMonth: user.accounting.uploadLimitNextMonth,
       premiumServiceStatus: user.premiumInfo?.premiumServiceStatus,
       premiumServiceStart: user.premiumInfo?.premiumServiceStart,
-      premiumExpirationDate: user.premiumInfo?.premiumExpirationDate
+      premiumExpirationDate: user.premiumInfo?.premiumExpirationDate,
     };
   }
 }

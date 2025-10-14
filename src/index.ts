@@ -151,12 +151,17 @@ const tools: Tool[] = [
         },
         content: {
           type: 'string',
-          description: 'New content (optional)',
+          description: 'New content (optional, Markdown supported)',
         },
         tags: {
           type: 'array',
           items: { type: 'string' },
           description: 'New tags (replaces existing tags)',
+        },
+        forceUpdate: {
+          type: 'boolean',
+          description: 'Force update by creating a new note if update fails due to locks',
+          default: false,
         },
       },
       required: ['guid'],
@@ -363,7 +368,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'evernote_get_note': {
         const { guid, includeContent = true } = args as any;
-        const note = await evernoteApi.getNote(guid, includeContent);
+        const note = await evernoteApi.getNote(guid, includeContent, includeContent);
         
         let result: any = {
           guid: note.guid,
@@ -373,7 +378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         if (includeContent && note.content) {
-          result.content = evernoteApi.convertFromENML(note.content);
+          result.content = evernoteApi.convertENMLToMarkdown(note.content, note.resources);
         }
 
         if (note.tagNames) {
@@ -391,33 +396,95 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_note': {
-        const { guid, title, content, tags } = args as any;
+        const { guid, title, content, tags, forceUpdate = false } = args as any;
         
-        // Get existing note
-        const note = await evernoteApi.getNote(guid, true);
+        console.error(`=== Update Note Debug ===`);
+        console.error(`GUID: ${guid}`);
+        console.error(`Title: ${title || 'unchanged'}`);
+        console.error(`Content: ${content ? `${content.length} chars` : 'unchanged'}`);
+        console.error(`Tags: ${tags ? JSON.stringify(tags) : 'unchanged'}`);
+        console.error(`========================`);
         
-        // Update fields
-        if (title !== undefined) note.title = title;
-        if (content !== undefined) {
-          let enmlContent = '<?xml version="1.0" encoding="UTF-8"?>';
-          enmlContent += '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">';
-          enmlContent += '<en-note>';
-          enmlContent += evernoteApi['convertToENML'](content);
-          enmlContent += '</en-note>';
-          note.content = enmlContent;
+        try {
+          // Get existing note
+          console.error(`Step 1: Getting existing note ${guid}...`);
+          const note = await evernoteApi.getNote(guid, true, true);
+          console.error(`Step 1 complete: Retrieved note "${note.title}"`);
+          
+          // Update fields
+          if (title !== undefined) {
+            console.error(`Step 2: Updating title from "${note.title}" to "${title}"`);
+            note.title = title;
+          }
+          
+          if (content !== undefined) {
+            console.error(`Step 3: Updating content (${content.length} chars)...`);
+            await evernoteApi.applyMarkdownToNote(note, content);
+            console.error(`Step 3 complete: Content updated`);
+          }
+          
+          if (tags !== undefined) {
+            console.error(`Step 4: Updating tags to ${JSON.stringify(tags)}`);
+            note.tagNames = tags;
+          }
+
+          console.error(`Step 5: Calling updateNote API...`);
+          const updatedNote = await evernoteApi.updateNote(note);
+          console.error(`Step 5 complete: Note updated successfully`);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Note updated successfully!\nGUID: ${updatedNote.guid}\nTitle: ${updatedNote.title}`,
+              },
+            ],
+          };
+        } catch (stepError: any) {
+          console.error(`=== Update Note Step Failed ===`);
+          console.error(`Step Error: ${stepError.message}`);
+          console.error(`Error Code: ${stepError.errorCode}`);
+          console.error(`Step Stack: ${stepError.stack}`);
+          console.error(`==============================`);
+          
+          // Handle RTE room conflict with forceUpdate option
+          if (stepError.errorCode === 19 && forceUpdate) {
+            console.error(`Attempting force update by creating new note...`);
+            try {
+              // Get the original note again for force update
+              const originalNote = await evernoteApi.getNote(guid, true, true);
+              
+              // Create a new note with updated content
+              const newNote = await evernoteApi.createNote({
+                title: title || originalNote.title,
+                content: content || evernoteApi.convertENMLToMarkdown(originalNote.content, originalNote.resources),
+                notebookGuid: originalNote.notebookGuid,
+                tagNames: tags || originalNote.tagNames,
+              });
+              
+              // Delete the old note
+              await evernoteApi.deleteNote(guid);
+              
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `⚠️ Note update forced by creating new note due to edit lock!\n` +
+                          `Original GUID: ${guid}\n` +
+                          `New GUID: ${newNote.guid}\n` +
+                          `Title: ${newNote.title}\n\n` +
+                          `The original note was deleted and replaced with an updated version.`,
+                  },
+                ],
+              };
+            } catch (forceError: any) {
+              console.error(`Force update also failed: ${forceError.message}`);
+              stepError.message += `\n\nForce update also failed: ${forceError.message}`;
+            }
+          }
+          
+          throw stepError;
         }
-        if (tags !== undefined) note.tagNames = tags;
-
-        const updatedNote = await evernoteApi.updateNote(note);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Note updated successfully!\nGUID: ${updatedNote.guid}\nTitle: ${updatedNote.title}`,
-            },
-          ],
-        };
       }
 
       case 'evernote_delete_note': {
@@ -673,8 +740,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error: any) {
-    console.error(`Tool ${name} failed:`, error);
-    throw new Error(`Tool ${name} failed: ${error.message}`);
+    // Enhanced error logging with debug information
+    const errorInfo = {
+      tool: name,
+      arguments: args,
+      timestamp: new Date().toISOString(),
+      error: {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        // Include Evernote-specific error details if available
+        ...(error.errorCode && { errorCode: error.errorCode }),
+        ...(error.parameter && { parameter: error.parameter }),
+        ...(error.rateLimitDuration && { rateLimitDuration: error.rateLimitDuration }),
+      },
+      environment: {
+        apiInitialized: !!api,
+        apiInitError,
+        environment: ENVIRONMENT,
+        hasTokens: !!(process.env.EVERNOTE_ACCESS_TOKEN || process.env.OAUTH_TOKEN),
+      }
+    };
+    
+    console.error('=== MCP Tool Execution Failed ===');
+    console.error(JSON.stringify(errorInfo, null, 2));
+    console.error('================================');
+
+    // Return detailed error information instead of throwing
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `❌ Tool execution failed: ${name}\n\n` +
+                `Error: ${error.message}\n\n` +
+                `Arguments: ${JSON.stringify(args, null, 2)}\n\n` +
+                `Timestamp: ${errorInfo.timestamp}\n\n` +
+                `Debug Info:\n${JSON.stringify(errorInfo, null, 2)}`,
+        },
+      ],
+      isError: true,
+    };
   }
 });
 

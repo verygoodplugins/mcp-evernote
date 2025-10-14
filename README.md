@@ -31,6 +31,7 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
   - Read and retrieve note contents
   - Update existing notes
   - Delete notes
+  - Automatic Markdown ↔ ENML conversion (GFM + local attachments)
 - 📚 **Notebook Management**
   - List all notebooks
   - Create new notebooks
@@ -228,6 +229,25 @@ EVERNOTE_NOTESTORE_URL=your-notestore-url
 
 ## Available Tools
 
+## Markdown Support
+
+This server automatically converts between Markdown and Evernote's ENML format:
+
+- Create/update: Markdown input is rendered to ENML-safe HTML inside `<en-note>`.
+  - GFM task lists `- [ ]` map to Evernote checkboxes `<en-todo/>`.
+  - Checked tasks `- [x]` map to `<en-todo checked="true"/>`.
+-  - Local Markdown images/files (`![alt](./path.png)` or `file://...`) are uploaded as Evernote resources automatically.
+-  - Existing attachments are preserved by referencing `evernote-resource:<hash>` in Markdown.
+-  - Remote `http(s)` images remain links (download locally if you want them embedded).
+-  - Common Markdown elements (headings, lists, code blocks, tables, emphasis, links) are preserved.
+- Retrieve: ENML content is converted back to Markdown (GFM), including task lists and attachments.
+  - Embedded images become `![alt](evernote-resource:<hash>)` and other files become `[file](evernote-resource:<hash>)` so you can round-trip them safely.
+
+Limitations:
+- Remote URLs are not fetched automatically; save them locally and reference the file to embed.
+- Keep the `evernote-resource:<hash>` references in Markdown if you want existing attachments to survive edits.
+- Some exotic HTML not supported by ENML will be sanitized/removed.
+
 ### Note Operations
 
 #### `evernote_create_note`
@@ -263,6 +283,8 @@ Retrieve a specific note by GUID.
 **Parameters:**
 - `guid` (required): Note GUID
 - `includeContent` (optional): Include note content (default: true)
+
+> Returned Markdown represents embedded resources with `evernote-resource:<hash>` URLs. Leave those references intact so attachments stay linked when you edit the note.
 
 #### `evernote_update_note`
 Update an existing note.
@@ -453,20 +475,18 @@ GPL-3.0 - See [LICENSE](LICENSE) file for details.
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/verygoodplugins/mcp-evernote/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/verygoodplugins/mcp-evernote/discussions)
-- **Documentation**: [Wiki](https://github.com/verygoodplugins/mcp-evernote/wiki)
 
 ## Acknowledgments
 
 - Built with [Model Context Protocol SDK](https://github.com/anthropics/model-context-protocol)
 - Powered by [Evernote API](https://dev.evernote.com/)
-- Part of the [Very Good Plugins](https://github.com/verygoodplugins) ecosystem
+- Part of the [Very Good Plugins](https://verygoodplugins.com) ecosystem
 
 ## Roadmap
 
 ### Near Term
 - [ ] **Tag Management** - Add/remove tags from existing notes
-- [ ] **ENML ↔ Markdown Converter** - Bidirectional conversion between Evernote's ENML format and Markdown
+- [x] **ENML ↔ Markdown Converter** - Bidirectional conversion between Evernote's ENML format and Markdown
 - [ ] **Real-time Sync Hooks** - Detect changes made via Evernote desktop/mobile apps
 - [ ] **Database Monitoring** - Watch Evernote DB service for live updates
 

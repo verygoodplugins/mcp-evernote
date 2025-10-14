@@ -1,0 +1,128 @@
+name: Test Suite
+
+on:
+    push:
+        branches: [main, develop]
+    pull_request:
+        branches: [main, develop]
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+
+        strategy:
+            matrix:
+                node-version: [18.x, 20.x, 22.x]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js ${{ matrix.node-version }}
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run type checking
+              run: npx tsc --noEmit
+
+            - name: Run linting
+              run: npm run lint
+
+            - name: Run tests
+              run: npm test -- --coverage --verbose
+              env:
+                  NODE_ENV: test
+
+            - name: Upload coverage to Codecov
+              uses: codecov/codecov-action@v3
+              with:
+                  file: ./coverage/lcov.info
+                  flags: unittests
+                  name: codecov-umbrella
+                  fail_ci_if_error: true
+
+    test-build:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20.x"
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Build project
+              run: npm run build
+
+            - name: Test built artifacts
+              run: |
+                  # Verify main entry points exist
+                  test -f dist/index.js
+                  test -f dist/auth-standalone.js
+
+                  # Verify executability
+                  test -x dist/index.js
+                  test -x dist/auth-standalone.js
+
+                  # Basic smoke test (will fail without auth, but should not crash)
+                  timeout 5s node dist/index.js --help || true
+
+    security:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20.x"
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run security audit
+              run: npm audit --audit-level=moderate
+
+            - name: Check for known vulnerabilities
+              run: npx audit-ci --config .audit-ci.json
+              continue-on-error: true
+
+    compatibility:
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+                node-version: [18.x, 20.x]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js ${{ matrix.node-version }}
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run tests (cross-platform)
+              run: npm test
+              env:
+                  NODE_ENV: test
