@@ -20,30 +20,52 @@ export class EvernoteOAuth {
     // Check for token in environment variable first (for CI/CD or secure deployments)
     if (process.env.EVERNOTE_ACCESS_TOKEN) {
       console.error('Using Evernote access token from environment variable');
-      return {
+      const tokens = {
         token: process.env.EVERNOTE_ACCESS_TOKEN,
         noteStoreUrl: process.env.EVERNOTE_NOTESTORE_URL,
         webApiUrlPrefix: process.env.EVERNOTE_WEBAPI_URL,
         userId: process.env.EVERNOTE_USER_ID ? parseInt(process.env.EVERNOTE_USER_ID) : undefined
       };
+      
+      // Validate token is still usable
+      if (!await this.validateToken(tokens)) {
+        throw new Error('Environment token is invalid or expired');
+      }
+      
+      return tokens;
     }
     
     // Check if Claude Code is providing OAuth tokens
     // Claude Code may pass tokens after /mcp authentication
     if (this.isClaudeCode && process.env.OAUTH_TOKEN) {
       console.error('Using OAuth token from Claude Code');
-      return {
+      const tokens = {
         token: process.env.OAUTH_TOKEN,
         noteStoreUrl: process.env.OAUTH_NOTESTORE_URL,
         webApiUrlPrefix: process.env.OAUTH_WEBAPI_URL,
         userId: process.env.OAUTH_USER_ID ? parseInt(process.env.OAUTH_USER_ID) : undefined
       };
+      
+      // Validate token is still usable
+      if (!await this.validateToken(tokens)) {
+        throw new Error('Claude Code OAuth token is invalid or expired. Please re-authenticate.');
+      }
+      
+      return tokens;
     }
     
     // Try to load existing token from file
     const existingToken = await this.loadToken();
     if (existingToken) {
       console.error('Using existing Evernote access token from file');
+      
+      // Validate token is still usable
+      if (!await this.validateToken(existingToken)) {
+        console.error('Stored token is invalid or expired, removing it');
+        await this.revokeToken(); // Clean up invalid token
+        throw new Error('Stored token is invalid or expired. Please re-authenticate.');
+      }
+      
       return existingToken;
     }
 
@@ -87,6 +109,34 @@ export class EvernoteOAuth {
       
       throw new Error('Authentication required. Please run "npm run auth" first.');
     }
+  }
+
+  private async validateToken(tokens: OAuthTokens): Promise<boolean> {
+    // Check token structure
+    if (!tokens.token) {
+      console.error('Invalid token: missing token field');
+      return false;
+    }
+    
+    // Check if token is expired (if expiration is set)
+    if (tokens.expires) {
+      const now = Date.now();
+      const timeUntilExpiry = tokens.expires - now;
+      
+      // If expired, return false
+      if (timeUntilExpiry <= 0) {
+        console.error('Token expired');
+        return false;
+      }
+      
+      // If expiring within 1 hour, warn but still valid
+      if (timeUntilExpiry < 3600000) {
+        console.error(`Token expiring soon (in ${Math.floor(timeUntilExpiry / 60000)} minutes)`);
+      }
+    }
+    
+    // Token structure is valid
+    return true;
   }
 
   private async loadToken(): Promise<OAuthTokens | null> {

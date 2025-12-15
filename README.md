@@ -333,6 +333,38 @@ Get current user information and quota usage.
 #### `evernote_revoke_auth`
 Revoke stored authentication token.
 
+### Diagnostic Operations
+
+#### `evernote_health_check`
+Check the health and status of the Evernote MCP server.
+
+**Parameters:**
+- `verbose` (optional): Include detailed diagnostic information (default: false)
+
+**Returns:**
+- Server status (healthy, unhealthy, needs_auth, etc.)
+- Authentication status
+- Token information (when verbose)
+- Configuration details
+
+**Example:**
+```
+Check Evernote connection health with verbose details
+```
+
+#### `evernote_reconnect`
+Force reconnection to Evernote. Useful when experiencing "Not connected" errors.
+
+**Use this when:**
+- You see "Not connected" errors
+- You've just refreshed your token
+- The server seems stuck in a failed state
+
+**Example:**
+```
+Reconnect to Evernote
+```
+
 ## Search Syntax
 
 Evernote supports advanced search operators:
@@ -384,6 +416,36 @@ MCP_MEMORY_SERVICE_URL=http://localhost:8765
 Sync my "Important Concepts" notebook to memory for long-term retention
 ```
 
+## Connection Resilience (v1.2.0+)
+
+The server includes automatic recovery from connection issues:
+
+### Automatic Features
+- **Auto-retry**: Failed connections automatically retry after 30 seconds
+- **Token validation**: Expired tokens are detected proactively
+- **Graceful degradation**: Server stays alive during failures
+- **Clear error messages**: Actionable feedback on connection issues
+
+### "Not Connected" Errors
+
+If you see "Not connected" errors, the server will usually recover automatically. You can also:
+
+1. **Try the reconnect tool** (fastest):
+   ```
+   Reconnect to Evernote
+   ```
+
+2. **Check server health**:
+   ```
+   Check Evernote connection health with verbose details
+   ```
+
+3. **Re-authenticate if needed**:
+   - Claude Code: `/mcp` → Evernote → Authenticate
+   - Claude Desktop: `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth`
+
+For detailed information about connection issues and recovery, see [CONNECTION_TROUBLESHOOTING.md](CONNECTION_TROUBLESHOOTING.md).
+
 ## Troubleshooting
 
 ### Authentication Issues
@@ -406,16 +468,26 @@ If the OAuth callback doesn't work:
 3. Try using a different browser
 
 #### Token expired
-If your token expires:
-1. Delete `.evernote-token.json`
-2. Run `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth` again
-3. Restart Claude Desktop
+If your token expires, the server will now detect this automatically and prompt you to re-authenticate:
+1. In Claude Code: Use `/mcp` command to re-authenticate
+2. In Claude Desktop: Run `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth`
+
+Or use the reconnect tool to force immediate retry:
+```
+Reconnect to Evernote
+```
 
 ### Connection Errors
 
-- Verify your API credentials are correct
-- Check if you're using the right environment (sandbox vs production)
-- Ensure your firewall allows the OAuth callback port
+The server now handles most connection errors automatically:
+- **Transient failures**: Auto-retry after 30 seconds
+- **Token expiry**: Clear error message with re-auth instructions
+- **Network issues**: Server stays alive and retries
+
+If issues persist:
+- Check your API credentials are correct
+- Verify you're using the right environment (sandbox vs production)
+- See [CONNECTION_TROUBLESHOOTING.md](CONNECTION_TROUBLESHOOTING.md) for detailed guidance
 
 ### Rate Limiting
 

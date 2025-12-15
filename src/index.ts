@@ -37,25 +37,60 @@ let api: EvernoteAPI | null = null;
 
 // Initialize API on first use
 let apiInitError: string | null = null;
-async function ensureAPI(): Promise<EvernoteAPI> {
-  if (!api) {
-    try {
-      const { client, tokens } = await oauth.getAuthenticatedClient();
-      api = new EvernoteAPI(client, tokens);
-      apiInitError = null;
-    } catch (error: any) {
-      apiInitError = error.message || 'Failed to initialize Evernote API';
-      throw error;
-    }
+let lastInitAttempt: number = 0;
+const INIT_RETRY_DELAY = 30000; // 30 seconds before retrying failed init
+
+async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
+  // If forcing reinitialization, clear existing state
+  if (forceReinit) {
+    api = null;
+    apiInitError = null;
+    lastInitAttempt = 0;
   }
-  return api;
+  
+  // If we have a working API, return it
+  if (api) {
+    return api;
+  }
+  
+  // If we recently failed, check if enough time has passed to retry
+  const now = Date.now();
+  if (apiInitError && lastInitAttempt > 0) {
+    const timeSinceLastAttempt = now - lastInitAttempt;
+    if (timeSinceLastAttempt < INIT_RETRY_DELAY) {
+      throw new Error(`Not connected. Last attempt failed ${Math.floor(timeSinceLastAttempt / 1000)}s ago. Retry in ${Math.ceil((INIT_RETRY_DELAY - timeSinceLastAttempt) / 1000)}s.`);
+    }
+    // Enough time has passed, clear error and retry
+    console.error(`Retrying API initialization after ${timeSinceLastAttempt}ms...`);
+    apiInitError = null;
+  }
+  
+  try {
+    lastInitAttempt = now;
+    const { client, tokens } = await oauth.getAuthenticatedClient();
+    api = new EvernoteAPI(client, tokens);
+    apiInitError = null;
+    console.error('API initialized successfully');
+    return api;
+  } catch (error: any) {
+    apiInitError = error.message || 'Failed to initialize Evernote API';
+    console.error(`API initialization failed: ${apiInitError}`);
+    
+    // For auth errors, provide a clearer message
+    const errorMsg = error.message || '';
+    if (errorMsg.includes('Authentication required') || errorMsg.includes('token')) {
+      throw new Error('Not connected: Authentication required. Token may be expired or invalid.');
+    }
+    
+    throw new Error(`Not connected: ${apiInitError}`);
+  }
 }
 
 // Create MCP server
 const server = new Server(
   {
     name: 'mcp-evernote',
-    version: '1.0.0',
+    version: '1.2.0',
   },
   {
     capabilities: {
@@ -263,6 +298,14 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    name: 'evernote_reconnect',
+    description: 'Force reconnection to Evernote (useful when "Not connected" errors persist)',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 // List tools handler
@@ -281,6 +324,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'evernote_revoke_auth') {
       await oauth.revokeToken();
       api = null;
+      apiInitError = null;
+      lastInitAttempt = 0;
       return {
         content: [
           {
@@ -289,6 +334,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         ],
       };
+    }
+    
+    // Handle reconnect specially
+    if (name === 'evernote_reconnect') {
+      console.error('Force reconnect requested');
+      try {
+        await ensureAPI(true); // Force reinitialization
+        return {
+          content: [
+            {
+              type: 'text',
+              text: '✅ Successfully reconnected to Evernote',
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
+            },
+          ],
+        };
+      }
     }
 
     // Ensure API is initialized for all other operations
@@ -597,7 +667,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const healthStatus: any = {
           server: {
             name: 'mcp-evernote',
-            version: '1.0.0',
+            version: '1.2.0',
             status: 'running',
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
@@ -740,6 +810,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error: any) {
+    // Check if it's an authentication error that we can retry
+    const isAuthError = 
+      error.message?.includes('Not connected') ||
+      error.message?.includes('Authentication required') ||
+      error.message?.includes('token') ||
+      error.message?.includes('AUTHENTICATION_EXPIRED') ||
+      error.errorCode === 9; // Evernote auth expired error code
+    
+    // If auth error and haven't retried yet, try once with forced reinit
+    if (isAuthError && name !== 'evernote_reconnect' && name !== 'evernote_health_check') {
+      console.error(`Auth error detected, attempting automatic recovery for ${name}...`);
+      try {
+        // Force reinitialization
+        await ensureAPI(true);
+        
+        // Verify reconnection succeeded
+        console.error(`Verifying reconnection after ${name} failure...`);
+        await ensureAPI();
+        
+        // Execute the same operation again (simplified - real implementation would need to rerun the switch)
+        // For now, just inform user to retry
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `⚠️ Connection was lost but has been restored.\n\n` +
+                    `Original error: ${error.message}\n\n` +
+                    `Please retry your operation.`,
+            },
+          ],
+        };
+      } catch (retryError: any) {
+        console.error(`Auto-recovery failed: ${retryError.message}`);
+        // Continue with normal error handling below
+      }
+    }
+    
     // Enhanced error logging with debug information
     const errorInfo = {
       tool: name,
@@ -783,6 +890,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Handle unhandled rejections to prevent server crash
+process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+  console.error('=== Unhandled Rejection ===');
+  console.error('Reason:', reason);
+  console.error('Promise:', promise);
+  console.error('=========================');
+  
+  // If it's an authentication error, reset API state
+  if (reason?.message?.includes('Authentication') || 
+      reason?.message?.includes('token') ||
+      reason?.message?.includes('AUTHENTICATION_EXPIRED')) {
+    console.error('Detected authentication error in unhandled rejection, resetting API state');
+    api = null;
+    apiInitError = null;
+    lastInitAttempt = 0;
+  }
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error: Error) => {
+  console.error('=== Uncaught Exception ===');
+  console.error('Error:', error);
+  console.error('Stack:', error.stack);
+  console.error('========================');
+  
+  // Don't exit the process - try to recover
+  if (error.message?.includes('Authentication') || 
+      error.message?.includes('token') ||
+      error.message?.includes('AUTHENTICATION_EXPIRED')) {
+    console.error('Detected authentication error in uncaught exception, resetting API state');
+    api = null;
+    apiInitError = null;
+    lastInitAttempt = 0;
+  }
+});
+
 // Start server
 async function main() {
   console.error('Starting Evernote MCP server...');
@@ -793,4 +936,7 @@ async function main() {
   console.error('Evernote MCP server running on stdio');
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+});

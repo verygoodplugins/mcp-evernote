@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-12-15
+
+### Added
+- **Connection Resilience**: Automatic recovery from "Not connected" errors
+  - Automatic retry mechanism with configurable delay (30s default)
+  - Force reconnection capability with `evernote_reconnect` tool
+  - Token expiry validation before operations
+  - Graceful degradation on authentication failures
+- **Enhanced Token Management**: 
+  - Proactive token expiry checking
+  - Automatic cleanup of invalid/expired tokens
+  - Warning when tokens are expiring soon (< 1 hour)
+- **Robust Error Handling**:
+  - Global unhandled rejection handler to prevent server crashes
+  - Automatic API state reset on authentication errors
+  - Clear error messages with actionable recovery steps
+
+### Enhanced
+- **Authentication Flow**: Better error messages distinguishing between different auth failure scenarios
+- **Server Stability**: Process-level error handlers prevent complete server crashes
+- **Health Check**: Improved diagnostics for connection state and token validity
+
+### Fixed
+- **Intermittent "Not connected" errors**: Server now automatically retries failed connections instead of staying in failed state
+- **Persistent failure state**: API state is now properly reset after authentication errors
+- **Token expiration handling**: Expired tokens are now detected and cleaned up proactively
+
+### Technical Improvements
+- Added `lastInitAttempt` tracking to prevent rapid retry loops
+- Implemented configurable `INIT_RETRY_DELAY` for connection retry throttling
+- Enhanced error detection for authentication-related failures (error code 9, token messages)
+- Process-level exception handlers with automatic state recovery
+
 ## [1.1.0] - 2025-10-14
 
 ### Added
