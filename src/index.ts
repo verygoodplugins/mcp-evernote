@@ -23,6 +23,22 @@ if (!CONSUMER_KEY || !CONSUMER_SECRET) {
   process.exit(1);
 }
 
+// Polling configuration
+const MIN_POLL_INTERVAL = 15 * 60 * 1000; // 15 minutes minimum (Evernote requirement)
+const DEFAULT_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour default
+const POLL_INTERVAL = Math.max(
+  MIN_POLL_INTERVAL,
+  parseInt(process.env.EVERNOTE_POLL_INTERVAL || String(DEFAULT_POLL_INTERVAL), 10)
+);
+const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
+const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === 'true';
+
+// Polling state
+let lastUpdateCount: number | null = null;
+let pollInterval: NodeJS.Timeout | null = null;
+let lastPollTime: number = 0;
+let pollErrorCount: number = 0;
+
 // Initialize Evernote configuration
 const evernoteConfig: EvernoteConfig = {
   consumerKey: CONSUMER_KEY,
@@ -85,6 +101,209 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     throw new Error(`Not connected: ${apiInitError}`);
   }
 }
+
+// ============================================================================
+// Polling for Changes
+// ============================================================================
+
+interface PollingChange {
+  type: 'note_created' | 'note_updated' | 'note_deleted' | 'notebook_changed' | 'tag_changed';
+  guid?: string;
+  title?: string;
+  notebookGuid?: string;
+  timestamp: string;
+}
+
+async function sendWebhookNotification(changes: PollingChange[]): Promise<void> {
+  if (!WEBHOOK_URL) {
+    console.error('No webhook URL configured, skipping notification');
+    return;
+  }
+  
+  try {
+    const response = await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Evernote-Source': 'mcp-evernote-polling',
+      },
+      body: JSON.stringify({
+        source: 'mcp-evernote',
+        timestamp: new Date().toISOString(),
+        changes,
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error(`Webhook notification failed: ${response.status} ${response.statusText}`);
+    } else {
+      console.error(`Webhook notification sent successfully: ${changes.length} changes`);
+    }
+  } catch (error: any) {
+    console.error(`Webhook notification error: ${error.message}`);
+  }
+}
+
+async function checkForChanges(): Promise<PollingChange[]> {
+  const changes: PollingChange[] = [];
+  
+  try {
+    const evernoteApi = await ensureAPI();
+    const syncState = await evernoteApi.getSyncState();
+    const currentUpdateCount = syncState.updateCount;
+    
+    console.error(`Polling: Current updateCount = ${currentUpdateCount}, last = ${lastUpdateCount}`);
+    
+    // First run - just store the count
+    if (lastUpdateCount === null) {
+      lastUpdateCount = currentUpdateCount;
+      console.error('Polling: Initial sync state captured');
+      return changes;
+    }
+    
+    // No changes
+    if (currentUpdateCount === lastUpdateCount) {
+      console.error('Polling: No changes detected');
+      return changes;
+    }
+    
+    // Changes detected - get the sync chunk to see what changed
+    console.error(`Polling: Changes detected! Getting sync chunk from USN ${lastUpdateCount}...`);
+    
+    try {
+      const chunk = await evernoteApi.getSyncChunk(lastUpdateCount, 100, false);
+      
+      // Process notes
+      if (chunk.notes && chunk.notes.length > 0) {
+        for (const note of chunk.notes) {
+          const isNew = note.created === note.updated;
+          changes.push({
+            type: isNew ? 'note_created' : 'note_updated',
+            guid: note.guid,
+            title: note.title,
+            notebookGuid: note.notebookGuid,
+            timestamp: new Date(note.updated).toISOString(),
+          });
+        }
+      }
+      
+      // Process expunged notes (deleted)
+      if (chunk.expungedNotes && chunk.expungedNotes.length > 0) {
+        for (const guid of chunk.expungedNotes) {
+          changes.push({
+            type: 'note_deleted',
+            guid,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+      
+      // Process notebooks
+      if (chunk.notebooks && chunk.notebooks.length > 0) {
+        for (const notebook of chunk.notebooks) {
+          changes.push({
+            type: 'notebook_changed',
+            guid: notebook.guid,
+            title: notebook.name,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+      
+      // Process tags
+      if (chunk.tags && chunk.tags.length > 0) {
+        for (const tag of chunk.tags) {
+          changes.push({
+            type: 'tag_changed',
+            guid: tag.guid,
+            title: tag.name,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+      
+      console.error(`Polling: Found ${changes.length} changes`);
+    } catch (chunkError: any) {
+      console.error(`Polling: Failed to get sync chunk: ${chunkError.message}`);
+      // Still update the count to avoid re-processing
+    }
+    
+    lastUpdateCount = currentUpdateCount;
+    return changes;
+    
+  } catch (error: any) {
+    console.error(`Polling error: ${error.message}`);
+    pollErrorCount++;
+    
+    // If too many errors, stop polling
+    if (pollErrorCount >= 5) {
+      console.error('Polling: Too many errors, stopping polling');
+      stopPolling();
+    }
+    
+    return changes;
+  }
+}
+
+async function pollOnce(): Promise<PollingChange[]> {
+  lastPollTime = Date.now();
+  pollErrorCount = 0; // Reset on successful poll attempt
+  
+  const changes = await checkForChanges();
+  
+  if (changes.length > 0 && WEBHOOK_URL) {
+    await sendWebhookNotification(changes);
+  }
+  
+  return changes;
+}
+
+function startPolling(): void {
+  if (pollInterval) {
+    console.error('Polling already running');
+    return;
+  }
+  
+  console.error(`Starting Evernote polling every ${POLL_INTERVAL / 60000} minutes`);
+  if (WEBHOOK_URL) {
+    console.error(`Webhook URL: ${WEBHOOK_URL}`);
+  } else {
+    console.error('Warning: No EVERNOTE_WEBHOOK_URL configured - changes will be logged but not sent');
+  }
+  
+  // Do an initial poll
+  pollOnce().catch(err => console.error(`Initial poll failed: ${err.message}`));
+  
+  // Set up the interval
+  pollInterval = setInterval(() => {
+    pollOnce().catch(err => console.error(`Poll failed: ${err.message}`));
+  }, POLL_INTERVAL);
+}
+
+function stopPolling(): void {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+    console.error('Polling stopped');
+  }
+}
+
+function getPollingStatus(): any {
+  return {
+    enabled: POLLING_ENABLED,
+    running: !!pollInterval,
+    intervalMinutes: POLL_INTERVAL / 60000,
+    minIntervalMinutes: MIN_POLL_INTERVAL / 60000,
+    webhookUrl: WEBHOOK_URL ? WEBHOOK_URL.substring(0, 50) + '...' : null,
+    lastPollTime: lastPollTime ? new Date(lastPollTime).toISOString() : null,
+    lastUpdateCount,
+    errorCount: pollErrorCount,
+  };
+}
+
+// ============================================================================
+// MCP Server
+// ============================================================================
 
 // Create MCP server
 const server = new Server(
@@ -306,6 +525,38 @@ const tools: Tool[] = [
       properties: {},
     },
   },
+  {
+    name: 'evernote_start_polling',
+    description: 'Start polling for Evernote changes. Checks for new/updated notes and sends notifications to configured webhook URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'evernote_stop_polling',
+    description: 'Stop polling for Evernote changes',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'evernote_poll_now',
+    description: 'Check for Evernote changes immediately without waiting for next poll interval',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'evernote_polling_status',
+    description: 'Get the current polling configuration and status',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 // List tools handler
@@ -359,6 +610,85 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         };
       }
+    }
+    
+    // Handle polling tools
+    if (name === 'evernote_start_polling') {
+      startPolling();
+      const status = getPollingStatus();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
+                  `Webhook: ${WEBHOOK_URL || 'Not configured'}\n\n` +
+                  `Changes will be detected and sent to the webhook URL when found.`,
+          },
+        ],
+      };
+    }
+    
+    if (name === 'evernote_stop_polling') {
+      stopPolling();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '✅ Polling stopped',
+          },
+        ],
+      };
+    }
+    
+    if (name === 'evernote_poll_now') {
+      try {
+        const changes = await pollOnce();
+        if (changes.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '✅ Poll complete - no changes detected',
+              },
+            ],
+          };
+        }
+        
+        const changesSummary = changes.map(c => 
+          `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`
+        ).join('\n');
+        
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
+                    (WEBHOOK_URL ? 'Webhook notification sent.' : 'No webhook configured - changes not sent.'),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ Poll failed: ${error.message}`,
+            },
+          ],
+        };
+      }
+    }
+    
+    if (name === 'evernote_polling_status') {
+      const status = getPollingStatus();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(status, null, 2),
+          },
+        ],
+      };
     }
 
     // Ensure API is initialized for all other operations
@@ -930,10 +1260,23 @@ process.on('uncaughtException', (error: Error) => {
 async function main() {
   console.error('Starting Evernote MCP server...');
   console.error(`Environment: ${ENVIRONMENT}`);
-  
+  console.error(`Polling: ${POLLING_ENABLED ? 'enabled' : 'disabled'} (interval: ${POLL_INTERVAL / 60000} min)`);
+  if (WEBHOOK_URL) {
+    console.error(`Webhook URL: ${WEBHOOK_URL}`);
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Evernote MCP server running on stdio');
+  
+  // Auto-start polling if enabled
+  if (POLLING_ENABLED) {
+    console.error('Auto-starting polling...');
+    // Delay polling start to allow server to fully initialize
+    setTimeout(() => {
+      startPolling();
+    }, 5000);
+  }
 }
 
 main().catch((error) => {

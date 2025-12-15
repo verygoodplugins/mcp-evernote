@@ -60,6 +60,66 @@ npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 claude mcp add evernote "npx @verygoodplugins/mcp-evernote"
 ```
 
+## Change Notifications
+
+### Polling for Changes
+
+The server can poll Evernote for changes and send webhook notifications when notes are created, updated, or deleted.
+
+#### Configuration
+
+```env
+# Enable auto-start polling (default: false)
+EVERNOTE_POLLING_ENABLED=true
+
+# Poll interval in milliseconds (default: 3600000 = 1 hour, min: 900000 = 15 min)
+EVERNOTE_POLL_INTERVAL=3600000
+
+# Webhook URL to receive change notifications
+EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote
+```
+
+#### Webhook Payload
+
+When changes are detected, a POST request is sent to your webhook URL:
+
+```json
+{
+  "source": "mcp-evernote",
+  "timestamp": "2025-12-15T10:30:00.000Z",
+  "changes": [
+    {
+      "type": "note_created",
+      "guid": "abc123...",
+      "title": "My New Note",
+      "notebookGuid": "def456...",
+      "timestamp": "2025-12-15T10:29:55.000Z"
+    }
+  ]
+}
+```
+
+#### Manual Control
+
+Use these tools to control polling:
+- `evernote_start_polling` - Start polling manually
+- `evernote_stop_polling` - Stop polling
+- `evernote_poll_now` - Check for changes immediately
+- `evernote_polling_status` - Get polling configuration and status
+
+### Evernote Webhooks (Real-time)
+
+For real-time notifications, Evernote supports webhooks but requires manual registration:
+
+1. Email `devsupport@evernote.com` with:
+   - Your Consumer Key
+   - Webhook URL endpoint
+   - Any filters (optional)
+
+2. They'll configure your webhook to receive HTTP GET requests on note create/update events.
+
+---
+
 #### Option 2: Global Installation
 
 Install once, use anywhere:
@@ -118,6 +178,11 @@ EVERNOTE_CONSUMER_KEY=your-consumer-key
 EVERNOTE_CONSUMER_SECRET=your-consumer-secret
 EVERNOTE_ENVIRONMENT=production  # or 'sandbox'
 OAUTH_CALLBACK_PORT=3000        # Default: 3000
+
+# Polling configuration (optional)
+EVERNOTE_POLLING_ENABLED=true                                  # Auto-start polling
+EVERNOTE_POLL_INTERVAL=3600000                                 # 1 hour (min: 900000 = 15 min)
+EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for change notifications
 ```
 
 ### 3. Configure Your Client
@@ -364,6 +429,35 @@ Force reconnection to Evernote. Useful when experiencing "Not connected" errors.
 ```
 Reconnect to Evernote
 ```
+
+### Polling Operations
+
+#### `evernote_start_polling`
+Start polling for Evernote changes. Checks for new/updated/deleted notes and sends notifications to the configured webhook URL.
+
+**Example:**
+```
+Start polling for Evernote changes
+```
+
+#### `evernote_stop_polling`
+Stop the polling process.
+
+#### `evernote_poll_now`
+Check for changes immediately without waiting for the next poll interval. Returns a list of detected changes.
+
+**Example:**
+```
+Check for Evernote changes now
+```
+
+#### `evernote_polling_status`
+Get the current polling configuration and status, including:
+- Whether polling is running
+- Poll interval
+- Configured webhook URL
+- Last poll time
+- Error count
 
 ## Search Syntax
 

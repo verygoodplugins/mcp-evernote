@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Force reconnection capability with `evernote_reconnect` tool
   - Token expiry validation before operations
   - Graceful degradation on authentication failures
+- **Change Polling**: Monitor Evernote for changes and send webhook notifications
+  - Poll for new/updated/deleted notes on configurable interval (default: 1 hour, min: 15 min)
+  - Webhook notifications to external endpoints (e.g., AutoJack memory system)
+  - Auto-start polling via `EVERNOTE_POLLING_ENABLED=true`
+  - Manual control: `evernote_start_polling`, `evernote_stop_polling`, `evernote_poll_now`, `evernote_polling_status`
 - **Enhanced Token Management**: 
   - Proactive token expiry checking
   - Automatic cleanup of invalid/expired tokens
