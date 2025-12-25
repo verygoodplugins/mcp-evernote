@@ -1,0 +1,63 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.verygoodplugins/mcp-evernote",
+  "description": "MCP server for Evernote integration with note management, search, and synchronization. Supports OAuth authentication and ENML content conversion.",
+  "version": "1.2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/verygoodplugins/mcp-evernote"
+  },
+  "packages": [
+    {
+      "registry_type": "npm",
+      "identifier": "@verygoodplugins/mcp-evernote",
+      "version": "1.2.0"
+    }
+  ],
+  "tools": [
+    {
+      "name": "evernote_create_note",
+      "description": "Create a new note in Evernote"
+    },
+    {
+      "name": "evernote_get_note",
+      "description": "Get note content by GUID"
+    },
+    {
+      "name": "evernote_update_note",
+      "description": "Update an existing note"
+    },
+    {
+      "name": "evernote_delete_note",
+      "description": "Delete a note"
+    },
+    {
+      "name": "evernote_search_notes",
+      "description": "Search notes with Evernote query syntax"
+    },
+    {
+      "name": "evernote_list_notebooks",
+      "description": "List all notebooks"
+    },
+    {
+      "name": "evernote_create_notebook",
+      "description": "Create a new notebook"
+    },
+    {
+      "name": "evernote_list_tags",
+      "description": "List all tags"
+    },
+    {
+      "name": "evernote_create_tag",
+      "description": "Create a new tag"
+    },
+    {
+      "name": "evernote_get_user_info",
+      "description": "Get current user information"
+    }
+  ],
+  "author": {
+    "name": "Very Good Plugins",
+    "url": "https://verygoodplugins.com/?utm_source=mcp-registry"
+  }
+}

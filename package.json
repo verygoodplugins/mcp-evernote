@@ -4,6 +4,10 @@
   "description": "MCP server for Evernote integration with note management and synchronization",
   "main": "dist/index.js",
   "type": "module",
+  "mcpName": "io.github.verygoodplugins/mcp-evernote",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "bin": {
     "mcp-evernote": "dist/index.js",
     "mcp-evernote-auth": "dist/auth-standalone.js"

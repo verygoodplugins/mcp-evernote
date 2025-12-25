@@ -557,6 +557,156 @@ const tools: Tool[] = [
       properties: {},
     },
   },
+  // Resource tools
+  {
+    name: 'evernote_get_resource',
+    description: 'Download a resource (attachment) by its GUID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'Resource GUID',
+        },
+        includeData: {
+          type: 'boolean',
+          description: 'Include binary data as base64 (default: true)',
+          default: true,
+        },
+      },
+      required: ['guid'],
+    },
+  },
+  {
+    name: 'evernote_list_note_resources',
+    description: 'List all resources (attachments) in a note',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        noteGuid: {
+          type: 'string',
+          description: 'Note GUID',
+        },
+      },
+      required: ['noteGuid'],
+    },
+  },
+  {
+    name: 'evernote_add_resource_to_note',
+    description: 'Add a file/image attachment to an existing note',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        noteGuid: {
+          type: 'string',
+          description: 'Note GUID',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Local file path to attach',
+        },
+        filename: {
+          type: 'string',
+          description: 'Optional display filename (defaults to file basename)',
+        },
+      },
+      required: ['noteGuid', 'filePath'],
+    },
+  },
+  {
+    name: 'evernote_get_resource_recognition',
+    description: 'Get OCR/text recognition data from an image resource',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceGuid: {
+          type: 'string',
+          description: 'Resource GUID',
+        },
+      },
+      required: ['resourceGuid'],
+    },
+  },
+  // Notebook get/update tools
+  {
+    name: 'evernote_get_notebook',
+    description: 'Get notebook details by name or GUID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Notebook name',
+        },
+        guid: {
+          type: 'string',
+          description: 'Notebook GUID',
+        },
+      },
+    },
+  },
+  {
+    name: 'evernote_update_notebook',
+    description: 'Update notebook name or stack',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'Notebook GUID',
+        },
+        name: {
+          type: 'string',
+          description: 'New notebook name',
+        },
+        stack: {
+          type: 'string',
+          description: 'Stack name (empty string to remove from stack)',
+        },
+      },
+      required: ['guid'],
+    },
+  },
+  // Tag get/update tools
+  {
+    name: 'evernote_get_tag',
+    description: 'Get tag details by name or GUID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Tag name',
+        },
+        guid: {
+          type: 'string',
+          description: 'Tag GUID',
+        },
+      },
+    },
+  },
+  {
+    name: 'evernote_update_tag',
+    description: 'Update tag name or parent',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'Tag GUID',
+        },
+        name: {
+          type: 'string',
+          description: 'New tag name',
+        },
+        parentTagName: {
+          type: 'string',
+          description: 'Parent tag name (empty string to remove parent)',
+        },
+      },
+      required: ['guid'],
+    },
+  },
 ];
 
 // List tools handler
@@ -990,9 +1140,210 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      // Resource tools
+      case 'evernote_get_resource': {
+        const { guid, includeData = true } = args as any;
+        const resource = await evernoteApi.getResource(guid, includeData);
+
+        const result: any = {
+          guid: resource.guid,
+          filename: resource.attributes?.fileName,
+          mimeType: resource.mime,
+          size: resource.data?.size || 0,
+          hash: resource.data?.bodyHash
+            ? Buffer.from(resource.data.bodyHash).toString('hex')
+            : '',
+        };
+
+        if (includeData && resource.data?.body) {
+          result.data = Buffer.from(resource.data.body).toString('base64');
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_list_note_resources': {
+        const { noteGuid } = args as any;
+        const resources = await evernoteApi.listNoteResources(noteGuid);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(resources, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_add_resource_to_note': {
+        const { noteGuid, filePath, filename } = args as any;
+        const updatedNote = await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Resource added successfully!\nNote GUID: ${updatedNote.guid}\nNote Title: ${updatedNote.title}`,
+            },
+          ],
+        };
+      }
+
+      case 'evernote_get_resource_recognition': {
+        const { resourceGuid } = args as any;
+        const recognition = await evernoteApi.getResourceRecognition(resourceGuid);
+
+        // Extract just the text for a summary
+        const allText = recognition.items
+          .map(item => item.alternatives[0]?.text)
+          .filter(Boolean)
+          .join(' ');
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  ...recognition,
+                  extractedText: allText || '(no text recognized)',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      // Notebook get/update tools
+      case 'evernote_get_notebook': {
+        const { name, guid } = args as any;
+
+        if (!name && !guid) {
+          throw new Error('Either name or guid must be provided');
+        }
+
+        let notebook;
+        if (guid) {
+          notebook = await evernoteApi.getNotebook(guid);
+        } else {
+          const notebooks = await evernoteApi.listNotebooks();
+          notebook = notebooks.find(nb => nb.name === name);
+          if (!notebook) {
+            throw new Error(`Notebook '${name}' not found`);
+          }
+          // Get full notebook details
+          notebook = await evernoteApi.getNotebook(notebook.guid);
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(notebook, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_update_notebook': {
+        const { guid, name, stack } = args as any;
+        const notebook = await evernoteApi.getNotebook(guid);
+
+        if (name !== undefined) {
+          notebook.name = name;
+        }
+        if (stack !== undefined) {
+          notebook.stack = stack || null; // Empty string removes stack
+        }
+
+        const updatedNotebook = await evernoteApi.updateNotebook(notebook);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Notebook updated!\nGUID: ${updatedNotebook.guid}\nName: ${updatedNotebook.name}\nStack: ${updatedNotebook.stack || '(none)'}`,
+            },
+          ],
+        };
+      }
+
+      // Tag get/update tools
+      case 'evernote_get_tag': {
+        const { name, guid } = args as any;
+
+        if (!name && !guid) {
+          throw new Error('Either name or guid must be provided');
+        }
+
+        let tag;
+        if (guid) {
+          tag = await evernoteApi.getTag(guid);
+        } else {
+          const tags = await evernoteApi.listTags();
+          tag = tags.find(t => t.name === name);
+          if (!tag) {
+            throw new Error(`Tag '${name}' not found`);
+          }
+          // Get full tag details
+          tag = await evernoteApi.getTag(tag.guid!);
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(tag, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_update_tag': {
+        const { guid, name, parentTagName } = args as any;
+        const tag = await evernoteApi.getTag(guid);
+
+        if (name !== undefined) {
+          tag.name = name;
+        }
+        if (parentTagName !== undefined) {
+          if (parentTagName === '') {
+            tag.parentGuid = null; // Remove parent
+          } else {
+            const tags = await evernoteApi.listTags();
+            const parentTag = tags.find(t => t.name === parentTagName);
+            if (!parentTag) {
+              throw new Error(`Parent tag '${parentTagName}' not found`);
+            }
+            tag.parentGuid = parentTag.guid;
+          }
+        }
+
+        const updatedTag = await evernoteApi.updateTag(tag);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Tag updated!\nGUID: ${updatedTag.guid}\nName: ${updatedTag.name}\nParent: ${updatedTag.parentGuid || '(none)'}`,
+            },
+          ],
+        };
+      }
+
       case 'evernote_health_check': {
         const { verbose = false } = args as any;
-        
+
         // Basic server info
         const healthStatus: any = {
           server: {

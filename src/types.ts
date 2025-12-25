@@ -166,3 +166,30 @@ export interface Tag {
   parentGuid?: string;
   updateSequenceNum?: number;
 }
+
+export interface RecognitionItem {
+  boundingBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  alternatives: Array<{
+    text: string;
+    confidence: number;
+  }>;
+}
+
+export interface RecognitionData {
+  resourceGuid: string;
+  items: RecognitionItem[];
+}
+
+export interface ResourceInfo {
+  guid: string;
+  filename?: string;
+  mimeType: string;
+  size: number;
+  hash: string;
+  hasRecognition: boolean;
+}

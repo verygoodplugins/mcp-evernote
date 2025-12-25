@@ -12,7 +12,12 @@ import {
   NotebookInfo,
   Tag,
   OAuthTokens,
+  RecognitionData,
+  RecognitionItem,
+  ResourceInfo,
 } from './types.js';
+import { readFile } from 'fs/promises';
+import { basename, extname } from 'path';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -223,6 +228,148 @@ export class EvernoteAPI {
 
   async expungeTag(guid: string): Promise<void> {
     await this.noteStore.expungeTag(guid);
+  }
+
+  // Resource operations
+  async getResource(guid: string, withData: boolean = true): Promise<any> {
+    return await this.noteStore.getResource(guid, withData, false, false, false);
+  }
+
+  async getResourceRecognition(guid: string): Promise<RecognitionData> {
+    const recognitionData = await this.noteStore.getResourceRecognition(guid);
+    return this.parseRecognitionXml(guid, recognitionData);
+  }
+
+  async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {
+    const note = await this.noteStore.getNote(noteGuid, false, true, false, false);
+
+    if (!note.resources || note.resources.length === 0) {
+      return [];
+    }
+
+    return note.resources.map((r: any) => ({
+      guid: r.guid,
+      filename: r.attributes?.fileName,
+      mimeType: r.mime,
+      size: r.data?.size || 0,
+      hash: r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : '',
+      hasRecognition: !!r.recognition,
+    }));
+  }
+
+  async addResourceToNote(noteGuid: string, filePath: string, filename?: string): Promise<any> {
+    const EvernoteModule = (Evernote as any).default || Evernote;
+
+    // Read file
+    const fileData = await readFile(filePath);
+    const hash = this.computeHash(fileData);
+    const hashHex = hash.toString('hex');
+
+    // Determine MIME type from extension
+    const ext = extname(filePath).toLowerCase();
+    const mimeType = this.getMimeType(ext);
+    const displayName = filename || basename(filePath);
+
+    // Get existing note with content and resources
+    const note = await this.noteStore.getNote(noteGuid, true, true, false, false);
+
+    // Create new resource
+    const resource = new EvernoteModule.Types.Resource();
+    resource.data = new EvernoteModule.Types.Data();
+    resource.data.body = fileData;
+    resource.data.size = fileData.length;
+    resource.data.bodyHash = hash;
+    resource.mime = mimeType;
+
+    const attrs = new EvernoteModule.Types.ResourceAttributes();
+    attrs.fileName = displayName;
+    resource.attributes = attrs;
+
+    // Add to existing resources
+    if (!note.resources) {
+      note.resources = [];
+    }
+    note.resources.push(resource);
+
+    // Append en-media tag to content before </en-note>
+    const enMediaTag = `<en-media type="${mimeType}" hash="${hashHex}"/>`;
+    note.content = note.content.replace('</en-note>', `<br/>${enMediaTag}</en-note>`);
+
+    // Update note
+    return await this.updateNote(note);
+  }
+
+  private parseRecognitionXml(resourceGuid: string, xmlData: any): RecognitionData {
+    const items: RecognitionItem[] = [];
+
+    if (!xmlData) {
+      return { resourceGuid, items };
+    }
+
+    // Convert to string if it's a buffer
+    const xmlString = typeof xmlData === 'string'
+      ? xmlData
+      : Buffer.from(xmlData).toString('utf-8');
+
+    // Parse <item> elements with bounding box attributes
+    const itemRegex = /<item\s+x="(\d+)"\s+y="(\d+)"\s+w="(\d+)"\s+h="(\d+)"[^>]*>([\s\S]*?)<\/item>/g;
+    let itemMatch;
+
+    while ((itemMatch = itemRegex.exec(xmlString)) !== null) {
+      const [, x, y, w, h, content] = itemMatch;
+
+      // Parse <t> elements (text alternatives with confidence)
+      const alternatives: Array<{ text: string; confidence: number }> = [];
+      const textRegex = /<t\s+w="(\d+)"[^>]*>([^<]*)<\/t>/g;
+      let textMatch;
+
+      while ((textMatch = textRegex.exec(content)) !== null) {
+        const [, weight, text] = textMatch;
+        alternatives.push({
+          text: text,
+          confidence: parseInt(weight, 10) / 100, // Convert 0-100 to 0-1
+        });
+      }
+
+      if (alternatives.length > 0) {
+        items.push({
+          boundingBox: {
+            x: parseInt(x, 10),
+            y: parseInt(y, 10),
+            width: parseInt(w, 10),
+            height: parseInt(h, 10),
+          },
+          alternatives,
+        });
+      }
+    }
+
+    return { resourceGuid, items };
+  }
+
+  private getMimeType(ext: string): string {
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.pdf': 'application/pdf',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.amr': 'audio/amr',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.xml': 'text/xml',
+      '.json': 'application/json',
+      '.zip': 'application/zip',
+    };
+    return mimeTypes[ext] || 'application/octet-stream';
   }
 
   // Sync operations

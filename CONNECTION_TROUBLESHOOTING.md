@@ -440,3 +440,4 @@ The v1.2.0 update transforms the MCP Evernote server from brittle (manual restar
 ✅ **Manual override** available when needed  
 
 You should rarely need to restart the server now. Most issues self-heal within 30 seconds.
+

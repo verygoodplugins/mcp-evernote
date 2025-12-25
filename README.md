@@ -646,7 +646,7 @@ GPL-3.0 - See [LICENSE](LICENSE) file for details.
 
 - Built with [Model Context Protocol SDK](https://github.com/anthropics/model-context-protocol)
 - Powered by [Evernote API](https://dev.evernote.com/)
-- Part of the [Very Good Plugins](https://verygoodplugins.com) ecosystem
+- Part of the [Very Good Plugins](https://verygoodplugins.com?utm_source=github) ecosystem
 
 ## Roadmap
 
