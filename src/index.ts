@@ -920,7 +920,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { guid, includeContent = true } = args as any;
         const note = await evernoteApi.getNote(guid, includeContent, includeContent);
         
-        let result: any = {
+        const result: any = {
           guid: note.guid,
           title: note.title,
           created: new Date(note.created).toISOString(),
