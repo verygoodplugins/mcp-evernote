@@ -8,6 +8,8 @@ coverage/
 .env.test.local
 .env.production.local
 .evernote-token.json
+.cursor/mcp.json
+.cursor/rules/automem.mdc
 .DS_Store
 *.tsbuildinfo
 .nyc_output/
