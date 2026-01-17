@@ -12,7 +12,8 @@ Use memory tools proactively to maintain persistent context across sessions for 
 **AutoMem MCP Server**: You have access to the AutoMem memory system via MCP (Model Context Protocol). The memory server is already installed and active in your environment.
 
 **How it works**:
-- Tools are accessed via MCP with the `mcp_memory_*` prefix (e.g., `mcp_memory_store_memory`)
+
+- Tools are accessed via MCP with the `mcp__memory__*` prefix (e.g., `mcp__memory__store_memory`). Some clients may display an equivalent `mcp_memory_*` prefix — use whichever is available.
 - Data is stored in **FalkorDB** (graph database for relationships) and **Qdrant** (vector database for semantic search)
 - Memories persist across all conversations and sessions
 
@@ -21,9 +22,11 @@ Use memory tools proactively to maintain persistent context across sessions for 
 ## 3-Phase Memory Pattern
 
 ### 1. CONVERSATION START
+
 Recall relevant context for strategic and contextual questions:
 
 **ALWAYS recall for:**
+
 - Project context questions (documentation, tooling, deployment)
 - Architecture discussions or decisions
 - User preferences and choices
@@ -35,12 +38,14 @@ Recall relevant context for strategic and contextual questions:
 - Refactoring (understand why current structure exists)
 
 **ADAPTIVE RECALL** (based on context clues):
+
 - If files are open: Recall memories tagged with those components
 - If error messages present: Search for similar error patterns
 - If multiple related files: Recall architectural decisions
 - If PR/commit context: Recall related feature implementations
 
 **Skip memory ONLY for:**
+
 - Pure syntax/language questions ("How does Array.map work?")
 - Trivial edits (typos, formatting, simple renames)
 - Direct factual queries about current code ("What's in this function?")
@@ -49,37 +54,44 @@ Recall relevant context for strategic and contextual questions:
 **Natural integration:** If memories found, weave context into response naturally. Avoid robotic phrases like "I'm searching my memory" or "Let me recall..." Just use the information as if you've always known it.
 
 ### 2. DURING CONVERSATION
+
 Store memories for important events:
 
-**Decisions** (importance: 0.9, type: "Decision")
+**Decisions** (importance: 0.9, type: "Decision" — store as `metadata.type`)
+
 - Architecture choices, library selections, pattern decisions
 - Example: `Chose Redis for caching due to performance needs and sub-millisecond latency requirements`
 
 **Insights** (importance: 0.8, type: "Insight")
+
 - Root cause discoveries, key learnings, problem resolutions
 - Example: `UserAuth failing on null input. Root cause: missing validation. Added null checks before processing`
 
 **Patterns** (importance: 0.7, type: "Pattern")
+
 - Reusable patterns, best practices discovered
 - Example: `Using early returns for validation. Reduces nesting, improves readability. Applied in all API routes`
 
 **Preferences** (importance: 0.6-0.8, type: "Preference")
+
 - Configuration choices, tool selections, style preferences
 - Example: `Using Prettier with 2-space indents and single quotes. Enforced via pre-commit hooks`
 
 **Context** (importance: 0.5-0.7, type: "Context")
+
 - General information, new features, refactoring notes
 - Example: `Added JWT authentication with refresh tokens. Supports both access and refresh token rotation`
 
 **Storage format:**
+
 ```javascript
-mcp_memory_store_memory({
+mcp__memory__store_memory({
   content: "Brief title. Context and details. Impact/outcome.",
-  type: "Insight",
-  confidence: 0.95,
-  tags: ["mcp-evernote", "component", "2025-12"],
+  tags: ["mcp-evernote", "cursor", "component", "YYYY-MM"],
   importance: 0.8,
   metadata: {
+    type: "Insight",
+    confidence: 0.95,
     component: "auth",
     files_modified: ["src/auth/UserAuth.ts"],
     error_signature: "TypeError: Cannot read property 'id' of null",
@@ -89,15 +101,16 @@ mcp_memory_store_memory({
 ```
 
 ### 3. CONVERSATION END
+
 Summarize if multiple files modified, significant refactoring, new features, or important decisions:
 
 ```javascript
-mcp_memory_store_memory({
+mcp__memory__store_memory({
   content: "Added authentication system with JWT. Supports login, logout, and token refresh. Impact: Users can now login securely.",
-  type: "Context",
-  tags: ["mcp-evernote", "auth", "2025-12"],
+  tags: ["mcp-evernote", "cursor", "auth", "YYYY-MM"],
   importance: 0.9,
   metadata: {
+    type: "Context",
     files_modified: ["src/auth/UserAuth.ts", "src/middleware/auth.ts"],
     feature: "authentication"
   }
@@ -107,6 +120,7 @@ mcp_memory_store_memory({
 ## Memory Types
 
 **Valid types:**
+
 - **Decision** - Strategic or technical decisions (architecture, libraries, approaches)
 - **Pattern** - Recurring approaches, best practices, code patterns
 - **Preference** - User/team preferences (tools, config, style)
@@ -116,6 +130,7 @@ mcp_memory_store_memory({
 - **Context** - General contextual information (default if type omitted)
 
 **Type selection guide:**
+
 - Use explicit `type` when you're confident about the classification
 - Omit `type` to let the system auto-classify (less accurate but acceptable)
 - Include `confidence: 0.95` when providing explicit type (defaults to 0.9)
@@ -123,9 +138,10 @@ mcp_memory_store_memory({
 ## Tagging Convention
 
 ALWAYS include these tags:
+
 1. `mcp-evernote` - Project identifier
 2. `cursor` - Platform tag
-3. `2025-12` - Current month (YYYY-MM format)
+3. `YYYY-MM` - Current month
 4. Component tag - Specific area (e.g., "auth", "api", "frontend")
 
 ## Importance Scoring
@@ -153,39 +169,40 @@ Association types: `RELATES_TO`, `LEADS_TO`, `OCCURRED_BEFORE`, `PREFERS_OVER`, 
 ## Recall Strategies
 
 **Start simple, expand as needed:**
+
 ```javascript
 // 1. Basic recall (start here)
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   query: "authentication patterns",
   tags: ["mcp-evernote"],
   limit: 5
 })
 
 // 2. Add time window if needed
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   query: "API changes",
   tags: ["mcp-evernote"],
   time_query: "last 30 days"
 })
 
 // 3. For error patterns, be specific
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   query: "TypeError authentication timeout login",
   tags: ["mcp-evernote", "bug-fix"],
   limit: 5
 })
 
 // 4. Use prefix matching for component namespaces
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   tags: ["mcp-evernote", "auth/*"],
   tag_match: "prefix"
 })
 
 // 5. Parallel recall for comprehensive context
 const [decisions, recent, patterns] = await Promise.all([
-  mcp_memory_recall_memory({ tags: ["mcp-evernote", "decision"], limit: 3 }),
-  mcp_memory_recall_memory({ tags: ["mcp-evernote"], time_query: "today", limit: 3 }),
-  mcp_memory_recall_memory({ tags: ["mcp-evernote", "pattern"], limit: 3 })
+  mcp__memory__recall_memory({ tags: ["mcp-evernote", "decision"], limit: 3 }),
+  mcp__memory__recall_memory({ tags: ["mcp-evernote"], time_query: "today", limit: 3 }),
+  mcp__memory__recall_memory({ tags: ["mcp-evernote", "pattern"], limit: 3 })
 ]);
 ```
 
@@ -194,11 +211,13 @@ const [decisions, recent, patterns] = await Promise.all([
 Format: `Brief title. Context and details. Impact/outcome.`
 
 **Good:**
-- `Using PostgreSQL over MongoDB. Need ACID guarantees for transactions. Impact: Ensures data consistency.` (type: "Decision")
+
+- `Using PostgreSQL over MongoDB. Need ACID guarantees for transactions. Impact: Ensures data consistency.` (type: "Decision" — store as `metadata.type`)
 - `Login failing on special characters. Root: missing input sanitization. Added validator. Files: auth/login.ts` (type: "Insight")
 - `Early returns for validation. Reduces nesting, improves readability. Applied in all API routes.` (type: "Pattern")
 
 **Avoid:**
+
 - Trivial changes: "Fixed typo", "Updated comment"
 - Missing context: "Changed config" (what config? why?)
 - Secrets: Never store API keys, passwords, tokens
@@ -206,25 +225,24 @@ Format: `Brief title. Context and details. Impact/outcome.`
 
 ## Tool Reference
 
+Note: treat `type`/`confidence` as conventions stored inside `metadata` (e.g., `metadata.type`, `metadata.confidence`) unless your client exposes them as top-level fields.
+
 **Store memory:**
+
 ```javascript
-mcp_memory_store_memory({
+mcp__memory__store_memory({
   content: string,              // Required: Memory content (no [TYPE] prefix needed)
-  type?: string,                // Optional: "Decision", "Pattern", "Insight", "Preference", "Style", "Habit", "Context"
-  confidence?: number,          // Optional: 0.0-1.0 (default: 0.9 if type provided, auto-computed otherwise)
   tags?: string[],              // Optional: Tags for categorization
   importance?: number,          // Optional: 0.0-1.0 (default: 0.5)
   metadata?: object,            // Optional: Custom metadata
   timestamp?: string,           // Optional: ISO 8601 timestamp
-  id?: string,                  // Optional: Custom memory ID
-  t_valid?: string,             // Optional: When memory becomes valid
-  t_invalid?: string            // Optional: When memory expires
 })
 ```
 
 **Recall memories:**
+
 ```javascript
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   query?: string,
   tags?: string[],
   limit?: number,           // default: 3, max: 50
@@ -235,12 +253,11 @@ mcp_memory_recall_memory({
 ```
 
 **Update memory:**
+
 ```javascript
-mcp_memory_update_memory({
+mcp__memory__update_memory({
   memory_id: string,
   content?: string,
-  type?: string,
-  confidence?: number,
   tags?: string[],
   importance?: number,
   metadata?: object
@@ -248,8 +265,9 @@ mcp_memory_update_memory({
 ```
 
 **Associate memories:**
+
 ```javascript
-mcp_memory_associate_memories({
+mcp__memory__associate_memories({
   memory1_id: string,
   memory2_id: string,
   type: "RELATES_TO" | "LEADS_TO" | ...,
@@ -260,6 +278,7 @@ mcp_memory_associate_memories({
 ## Error Handling
 
 If memory operations fail:
+
 - **Recall fails/empty**: Continue without historical context. Don't announce the failure.
 - **Store fails**: Complete the task normally. Memory is enhancement, not requirement.
 - **Service unavailable**: Focus on solving the immediate problem.
@@ -281,6 +300,6 @@ Memory enhances the experience but should never block progress.
 
 **Installed**: `npx @verygoodplugins/mcp-automem cursor`
 **Project**: mcp-evernote
-**Current Month**: 2025-12
+**Current Month**: YYYY-MM
 
 Memory is your persistent brain across sessions. Use it strategically!
