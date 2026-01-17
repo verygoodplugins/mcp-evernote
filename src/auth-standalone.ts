@@ -202,11 +202,12 @@ async function performOAuth(credentials: Credentials) {
               const user = await userStore.getUser();
               
               const tokenData = {
-                accessToken,
+                // Keep token file compatible with src/oauth.ts (expects `token`)
+                token: accessToken,
                 noteStoreUrl,
                 webApiUrlPrefix: results.edam_webApiUrlPrefix,
                 userId: results.edam_userId,
-                expires: results.edam_expires || null,
+                expires: typeof results.edam_expires === 'number' ? results.edam_expires : undefined,
                 username: user.username,
                 environment: credentials.environment
               };
