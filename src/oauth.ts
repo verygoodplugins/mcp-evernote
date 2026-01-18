@@ -142,7 +142,12 @@ export class EvernoteOAuth {
   private async loadToken(): Promise<OAuthTokens | null> {
     try {
       const data = await fs.readFile(this.tokenFile, 'utf-8');
-      const tokens = JSON.parse(data) as OAuthTokens;
+      const raw = JSON.parse(data) as any;
+      const token = raw.token ?? raw.accessToken;
+      const tokens: OAuthTokens = {
+        ...raw,
+        token,
+      };
       
       // Validate token structure
       if (!tokens.token) {

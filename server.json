@@ -1,17 +1,22 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.verygoodplugins/mcp-evernote",
-  "description": "MCP server for Evernote integration with note management, search, and synchronization. Supports OAuth authentication and ENML content conversion.",
-  "version": "1.2.0",
+  "title": "MCP Evernote",
+  "description": "Evernote note management with OAuth and ENML conversion",
+  "version": "1.1.0",
+  "websiteUrl": "https://verygoodplugins.com/?utm_source=mcp-registry",
   "repository": {
-    "type": "git",
-    "url": "https://github.com/verygoodplugins/mcp-evernote"
+    "url": "https://github.com/verygoodplugins/mcp-evernote",
+    "source": "github"
   },
   "packages": [
     {
-      "registry_type": "npm",
+      "registryType": "npm",
       "identifier": "@verygoodplugins/mcp-evernote",
-      "version": "1.2.0"
+      "version": "1.1.0",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ],
   "tools": [
@@ -55,9 +60,5 @@
       "name": "evernote_get_user_info",
       "description": "Get current user information"
     }
-  ],
-  "author": {
-    "name": "Very Good Plugins",
-    "url": "https://verygoodplugins.com/?utm_source=mcp-registry"
-  }
+  ]
 }
