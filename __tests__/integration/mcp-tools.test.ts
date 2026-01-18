@@ -7,6 +7,12 @@ import {
   sampleNotebook,
   sampleTag,
   sampleUser,
+  sampleResource,
+  sampleResourceWithoutData,
+  sampleNoteWithResources,
+  sampleRecognitionXml,
+  sampleRecognitionXmlBuffer,
+  emptyRecognitionXml,
   mockEvernote
 } from '../mocks/evernote.mock';
 import {
@@ -398,6 +404,327 @@ describe('MCP Tools Integration', () => {
       const result = await callToolHandler(request);
 
       expect(result.content[0].text).toContain('Authentication token revoked');
+    });
+  });
+
+  describe('Resource Operations', () => {
+    describe('evernote_get_resource', () => {
+      it('should get resource with binary data', async () => {
+        mockNoteStore.getResource.mockResolvedValue(sampleResource);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource',
+            arguments: {
+              guid: 'resource-guid-123',
+              includeData: true
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(mockNoteStore.getResource).toHaveBeenCalledWith('resource-guid-123', true, false, false, false);
+        expect(result.content[0].type).toBe('text');
+
+        const resourceData = JSON.parse(result.content[0].text);
+        expect(resourceData).toHaveProperty('guid', 'resource-guid-123');
+        expect(resourceData).toHaveProperty('filename', 'test-image.png');
+        expect(resourceData).toHaveProperty('mimeType', 'image/png');
+        expect(resourceData).toHaveProperty('data'); // base64 encoded
+      });
+
+      it('should get resource without binary data', async () => {
+        mockNoteStore.getResource.mockResolvedValue(sampleResourceWithoutData);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource',
+            arguments: {
+              guid: 'resource-guid-123',
+              includeData: false
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(mockNoteStore.getResource).toHaveBeenCalledWith('resource-guid-123', false, false, false, false);
+
+        const resourceData = JSON.parse(result.content[0].text);
+        expect(resourceData).toHaveProperty('guid', 'resource-guid-123');
+        expect(resourceData).not.toHaveProperty('data');
+      });
+
+      it('should handle resource not found error', async () => {
+        mockNoteStore.getResource.mockRejectedValue(new Error('Resource not found'));
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource',
+            arguments: {
+              guid: 'nonexistent-guid'
+            }
+          }
+        };
+
+        await expect(callToolHandler(request)).rejects.toThrow('Resource not found');
+      });
+    });
+
+    describe('evernote_list_note_resources', () => {
+      it('should list resources for a note with attachments', async () => {
+        mockNoteStore.getNote.mockResolvedValue(sampleNoteWithResources);
+
+        const request = {
+          params: {
+            name: 'evernote_list_note_resources',
+            arguments: {
+              noteGuid: 'note-guid-123'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(mockNoteStore.getNote).toHaveBeenCalledWith('note-guid-123', false, true, false, false);
+        expect(result.content[0].type).toBe('text');
+
+        const resources = JSON.parse(result.content[0].text);
+        expect(Array.isArray(resources)).toBe(true);
+        expect(resources).toHaveLength(2);
+        expect(resources[0]).toHaveProperty('guid', 'resource-guid-123');
+        expect(resources[0]).toHaveProperty('filename', 'test-image.png');
+        expect(resources[0]).toHaveProperty('mimeType', 'image/png');
+        expect(resources[0]).toHaveProperty('hasRecognition', false);
+        expect(resources[1]).toHaveProperty('guid', 'resource-guid-456');
+        expect(resources[1]).toHaveProperty('hasRecognition', true);
+      });
+
+      it('should return empty array for note without resources', async () => {
+        mockNoteStore.getNote.mockResolvedValue({ ...sampleNote, resources: [] });
+
+        const request = {
+          params: {
+            name: 'evernote_list_note_resources',
+            arguments: {
+              noteGuid: 'note-guid-456'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        const resources = JSON.parse(result.content[0].text);
+        expect(Array.isArray(resources)).toBe(true);
+        expect(resources).toHaveLength(0);
+      });
+
+      it('should handle note not found error', async () => {
+        mockNoteStore.getNote.mockRejectedValue(new Error('Note not found'));
+
+        const request = {
+          params: {
+            name: 'evernote_list_note_resources',
+            arguments: {
+              noteGuid: 'nonexistent-note'
+            }
+          }
+        };
+
+        await expect(callToolHandler(request)).rejects.toThrow('Note not found');
+      });
+    });
+
+    describe('evernote_add_resource_to_note', () => {
+      beforeEach(() => {
+        // Mock file read
+        mockFs.readFile.mockImplementation((path: string) => {
+          if (path === '/path/to/image.png') {
+            return Promise.resolve(Buffer.from('fake-image-data'));
+          }
+          if (path.includes('.evernote-token.json')) {
+            return Promise.resolve(JSON.stringify(sampleTokens));
+          }
+          return Promise.reject(new Error('File not found'));
+        });
+        mockNoteStore.getNote.mockResolvedValue({
+          ...sampleNote,
+          resources: []
+        });
+        mockNoteStore.updateNote.mockResolvedValue({
+          ...sampleNote,
+          resources: [sampleResource]
+        });
+      });
+
+      it('should add resource to note successfully', async () => {
+        const request = {
+          params: {
+            name: 'evernote_add_resource_to_note',
+            arguments: {
+              noteGuid: 'note-guid-123',
+              filePath: '/path/to/image.png'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(mockNoteStore.getNote).toHaveBeenCalledWith('note-guid-123', true, true, false, false);
+        expect(mockNoteStore.updateNote).toHaveBeenCalled();
+        expect(result.content[0].text).toContain('Resource added successfully');
+        expect(result.content[0].text).toContain('note-guid-123');
+      });
+
+      it('should add resource with custom filename', async () => {
+        const request = {
+          params: {
+            name: 'evernote_add_resource_to_note',
+            arguments: {
+              noteGuid: 'note-guid-123',
+              filePath: '/path/to/image.png',
+              filename: 'custom-name.png'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(result.content[0].text).toContain('Resource added successfully');
+      });
+
+      it('should handle file not found error', async () => {
+        const request = {
+          params: {
+            name: 'evernote_add_resource_to_note',
+            arguments: {
+              noteGuid: 'note-guid-123',
+              filePath: '/path/to/nonexistent.png'
+            }
+          }
+        };
+
+        await expect(callToolHandler(request)).rejects.toThrow('File not found');
+      });
+
+      it('should handle invalid note error', async () => {
+        mockNoteStore.getNote.mockRejectedValue(new Error('Note not found'));
+
+        const request = {
+          params: {
+            name: 'evernote_add_resource_to_note',
+            arguments: {
+              noteGuid: 'invalid-note-guid',
+              filePath: '/path/to/image.png'
+            }
+          }
+        };
+
+        await expect(callToolHandler(request)).rejects.toThrow('Note not found');
+      });
+    });
+
+    describe('evernote_get_resource_recognition', () => {
+      it('should get OCR recognition data successfully', async () => {
+        mockNoteStore.getResourceRecognition.mockResolvedValue(sampleRecognitionXml);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource_recognition',
+            arguments: {
+              resourceGuid: 'resource-guid-123'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        expect(mockNoteStore.getResourceRecognition).toHaveBeenCalledWith('resource-guid-123');
+        expect(result.content[0].type).toBe('text');
+
+        const recognitionData = JSON.parse(result.content[0].text);
+        expect(recognitionData).toHaveProperty('resourceGuid', 'resource-guid-123');
+        expect(recognitionData).toHaveProperty('items');
+        expect(Array.isArray(recognitionData.items)).toBe(true);
+        expect(recognitionData.items.length).toBeGreaterThan(0);
+        expect(recognitionData).toHaveProperty('extractedText');
+        expect(recognitionData.extractedText).toContain('Hello');
+        expect(recognitionData.extractedText).toContain('World');
+      });
+
+      it('should handle recognition data as Buffer', async () => {
+        mockNoteStore.getResourceRecognition.mockResolvedValue(sampleRecognitionXmlBuffer);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource_recognition',
+            arguments: {
+              resourceGuid: 'resource-guid-123'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        const recognitionData = JSON.parse(result.content[0].text);
+        expect(recognitionData).toHaveProperty('items');
+        expect(recognitionData.items.length).toBeGreaterThan(0);
+      });
+
+      it('should handle empty recognition data', async () => {
+        mockNoteStore.getResourceRecognition.mockResolvedValue(emptyRecognitionXml);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource_recognition',
+            arguments: {
+              resourceGuid: 'resource-guid-123'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        const recognitionData = JSON.parse(result.content[0].text);
+        expect(recognitionData).toHaveProperty('items');
+        expect(recognitionData.items).toHaveLength(0);
+        expect(recognitionData.extractedText).toBe('(no text recognized)');
+      });
+
+      it('should handle null recognition data', async () => {
+        mockNoteStore.getResourceRecognition.mockResolvedValue(null);
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource_recognition',
+            arguments: {
+              resourceGuid: 'resource-guid-123'
+            }
+          }
+        };
+
+        const result = await callToolHandler(request);
+
+        const recognitionData = JSON.parse(result.content[0].text);
+        expect(recognitionData).toHaveProperty('items');
+        expect(recognitionData.items).toHaveLength(0);
+      });
+
+      it('should handle resource not found error', async () => {
+        mockNoteStore.getResourceRecognition.mockRejectedValue(new Error('Resource not found'));
+
+        const request = {
+          params: {
+            name: 'evernote_get_resource_recognition',
+            arguments: {
+              resourceGuid: 'nonexistent-resource'
+            }
+          }
+        };
+
+        await expect(callToolHandler(request)).rejects.toThrow('Resource not found');
+      });
     });
   });
 
