@@ -2,43 +2,41 @@
 
 ## Overview
 
-This project implements a comprehensive automated testing strategy for the MCP Evernote server, covering unit tests, integration tests, end-to-end tests, and error scenarios.
+This repository has a small Jest test suite focused on fast, offline verification (module import sanity checks, Markdown/ENML conversion, and OAuth/token handling). It also contains mocked integration/e2e tests that currently need updating to match the latest server/tooling behavior.
 
 ## Test Structure
 
 ```
 __tests__/
-├── setup.ts                 # Global test setup
-├── mocks/                   # Mock implementations
-│   ├── evernote.mock.ts     # Evernote SDK mocks
-│   ├── oauth.mock.ts        # OAuth flow mocks
-│   └── mcp-server.mock.ts   # MCP Server mocks
-├── unit/                    # Unit tests
-│   ├── evernote-api.test.ts # EvernoteAPI class tests
-│   ├── oauth.test.ts        # OAuth authentication tests
-│   └── error-scenarios.test.ts # Error handling tests
-├── integration/             # Integration tests
-│   └── mcp-tools.test.ts    # MCP tool handler tests
-└── e2e/                     # End-to-end tests
-    └── mcp-protocol.test.ts # MCP protocol compliance tests
+├── setup.ts                      # Global test setup
+├── mocks/                        # Mock implementations
+│   ├── evernote.mock.ts          # Evernote SDK mocks
+│   ├── oauth.mock.ts             # OAuth flow mocks
+│   └── mcp-server.mock.ts        # MCP Server mocks
+├── unit/                         # Unit tests
+│   ├── markdown.test.ts          # Markdown ↔ ENML conversion
+│   ├── simple-oauth.test.ts      # OAuth/token resolution basics
+│   └── error-scenarios.test.ts   # Minimal error scenario coverage
+├── integration/                  # Integration tests
+│   ├── basic-functionality.test.ts # Import/build/package sanity checks
+│   └── mcp-tools.test.ts         # Mocked MCP tool handler tests (currently skipped by default)
+└── e2e/                          # End-to-end tests
+    └── mcp-protocol.test.ts      # Mocked MCP protocol compliance tests (currently skipped by default)
 ```
 
 ## Test Categories
 
 ### Unit Tests
-- **EvernoteAPI Class**: Tests all CRUD operations, markdown conversion, and API interactions
-- **OAuth Authentication**: Tests token management, environment detection, and authentication flows
-- **Error Scenarios**: Comprehensive error handling for network, authentication, and API failures
+- **Markdown conversion**: Basic Markdown → ENML and ENML → Markdown behavior
+- **OAuth/token resolution**: Environment variable behavior and local token file compatibility
+- **Error scenarios**: Minimal sanity checks for error handling paths
 
 ### Integration Tests
-- **MCP Tools**: Tests all 11 MCP tools with realistic scenarios
-- **Tool Parameters**: Validates input schemas and parameter handling
-- **Response Formats**: Ensures proper MCP response structure
+- **Basic functionality**: Ensures the project can be imported and has expected build/package wiring
+- **Mocked MCP tools**: A mocked MCP tools suite exists, but it is currently skipped by default via `jest.config.js` (see below)
 
 ### End-to-End Tests
-- **Protocol Compliance**: Tests MCP server initialization and protocol adherence
-- **Tool Discovery**: Validates tool listing and schema correctness
-- **Request Handling**: Tests full request/response cycles
+- **Mocked protocol compliance**: A mocked MCP protocol suite exists, but it is currently skipped by default via `jest.config.js` (see below)
 
 ## Running Tests
 
@@ -51,93 +49,54 @@ npm run test:coverage
 
 # Run specific test categories
 npm run test:unit
-npm run test:integration  
+npm run test:integration
 npm run test:e2e
 
 # Watch mode for development
 npm run test:watch
 ```
 
-## Coverage Goals
+### Skipped-by-default suites
 
-- **Unit Tests**: ≥90% code coverage
-- **Integration Tests**: All 11 MCP tools covered
-- **Error Scenarios**: All major error paths tested
-- **Protocol Compliance**: Full MCP specification adherence
+`jest.config.js` currently excludes:
+
+- `__tests__/integration/mcp-tools.test.ts`
+- `__tests__/e2e/mcp-protocol.test.ts`
+
+This means `npm test`, `npm run test:integration`, and `npm run test:e2e` will not execute those files until:
+1) the ignore list is removed/updated, and
+2) those test suites are brought back in sync with the current server version/tool list.
+
+## Coverage Notes
+
+- Coverage is collected from `src/**/*.ts`, but `src/index.ts` and `src/auth-standalone.ts` are excluded in `jest.config.js`.
+- If increasing coverage is a release goal, re-enable and update the mocked integration/e2e tests first, then add targeted unit tests around the highest-risk code paths (OAuth/token persistence, tool handlers, polling/webhooks).
 
 ## Mocking Strategy
 
-### External Dependencies
-- **Evernote SDK**: Comprehensive mocks for all API calls
-- **File System**: Mock fs/promises for token file operations
-- **MCP SDK**: Mock server and transport layers
-- **Environment**: Controlled environment variable testing
-
-### Test Data
-- Realistic sample data for notes, notebooks, tags, and users
-- Various error conditions and edge cases
-- Authentication tokens in different states
+- **Evernote SDK**: Mocks for NoteStore/UserStore methods used by the server
+- **File system**: `fs/promises` is mocked for token and credential file flows
+- **MCP SDK**: Server and transport layers are mocked to capture request handlers
+- **Environment**: Tests explicitly set/clear env vars to validate resolution order
 
 ## CI/CD Integration
 
-### GitHub Actions Workflow
-- **Multi-Node Testing**: Tests across Node.js 18.x, 20.x, 22.x
-- **Cross-Platform**: Ubuntu, Windows, macOS compatibility
-- **Security Auditing**: Automated vulnerability scanning
-- **Build Validation**: Ensures artifacts are properly generated
-
-### Quality Gates
-- All tests must pass
-- Type checking with TypeScript
-- Linting with ESLint
-- Security audit with audit-ci
-- Coverage reporting with Codecov
-
-## Best Practices
-
-### Test Organization
-- Each test file focuses on a specific component
-- Tests are grouped by functionality using `describe` blocks
-- Clear, descriptive test names that explain expected behavior
-
-### Mock Management
-- Centralized mock definitions in `/mocks/` directory
-- Consistent mock reset patterns between tests
-- Realistic mock data that reflects actual API responses
-
-### Error Testing
-- Comprehensive error scenario coverage
-- Network failures, authentication issues, API errors
-- Graceful degradation and proper error messages
-
-### Maintenance
-- Tests are updated alongside feature changes
-- Mock data reflects current API specifications
-- Regular review of test coverage and effectiveness
-
-## Development Workflow
-
-1. **Write Tests First**: Follow TDD principles for new features
-2. **Run Tests Locally**: Use watch mode during development
-3. **Check Coverage**: Ensure new code is properly tested
-4. **Update Mocks**: Keep mocks in sync with API changes
-5. **CI Validation**: All tests must pass before merging
+GitHub Actions runs:
+- Node matrix tests (18.x/20.x/22.x) and cross-platform smoke (`test.yml`)
+- Lint + build + tests (`ci.yml`)
+- Security checks (`npm audit`, `audit-ci`) depending on workflow configuration
 
 ## Troubleshooting
 
-### Common Issues
-- **Module Import Errors**: Check Jest ESM configuration
-- **Mock Type Errors**: Ensure proper TypeScript mock typing
-- **Timeout Issues**: Increase test timeout for slow operations
-- **Coverage Gaps**: Add tests for uncovered code paths
-
-### Debug Mode
 ```bash
-# Run specific test with debug output
-npm test -- __tests__/unit/evernote-api.test.ts --verbose
+# Run a specific test file
+npm test -- __tests__/unit/simple-oauth.test.ts --verbose
+
+# Run Jest in-band (helpful for debugging flakiness)
+npm test -- --runInBand
 
 # Run with Node.js debugger
 node --inspect-brk node_modules/.bin/jest --runInBand
 ```
 
-This comprehensive testing strategy ensures the MCP Evernote server is reliable, maintainable, and follows best practices for production-ready code.
+Keeping this doc at repo root is fine here since the project already uses root-level docs like `CONNECTION_TROUBLESHOOTING.md` and `CHANGELOG.md`. If you prefer a more standard OSS layout, move it to `docs/testing.md` or merge it into `CONTRIBUTING.md` and link from `README.md`.

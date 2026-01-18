@@ -5,9 +5,6 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with Evernote for note management, organization, and knowledge capture. Works with both Claude Code and Claude Desktop.
 
-**Version:** 1.0.0  
-**Release Date:** August 29th, 2025
-
 ## Installation Requirements
 
 ### For Claude Desktop Users:
@@ -54,10 +51,10 @@ The simplest way - no need to install anything globally:
 
 ```bash
 # For Claude Desktop - Run authentication
-npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
+npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 
 # For Claude Code - Just add the server
-claude mcp add evernote "npx @verygoodplugins/mcp-evernote"
+claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote mcp-evernote"
 ```
 
 ## Change Notifications
@@ -192,7 +189,7 @@ EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for 
 
 #### Quick Setup (Using NPX)
 ```bash
-claude mcp add evernote "npx @verygoodplugins/mcp-evernote" \
+claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote -c mcp-evernote" \
   --env EVERNOTE_CONSUMER_KEY=your-key \
   --env EVERNOTE_CONSUMER_SECRET=your-secret
 ```
@@ -215,7 +212,7 @@ claude mcp add evernote "npx @verygoodplugins/mcp-evernote" \
 
 Using NPX (no installation required):
 ```bash
-npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth
+npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 ```
 
 The auth script will:
@@ -240,7 +237,7 @@ mcp-evernote-auth
   "mcpServers": {
     "evernote": {
       "command": "npx",
-      "args": ["@verygoodplugins/mcp-evernote"],
+      "args": ["-y", "-p", "@verygoodplugins/mcp-evernote", "-c", "mcp-evernote"],
       "env": {
         "EVERNOTE_CONSUMER_KEY": "your-consumer-key",
         "EVERNOTE_CONSUMER_SECRET": "your-consumer-secret",
@@ -274,7 +271,7 @@ mcp-evernote-auth
 Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code.
 
 ### 2. Claude Desktop (Manual)
-Run `npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. Token saved to `.evernote-token.json`.
+Run `npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. Token saved to `.evernote-token.json`.
 
 ### 3. Environment Variables (CI/CD)
 ```env
@@ -632,7 +629,7 @@ Contributions are welcome! Please:
 2. Create a feature branch
 3. Make your changes
 4. Add tests if applicable
-5. Submit a pull request
+5. Submit a pull request (target `develop`; `main` is kept stable for Railway template deployments)
 
 ## License
 

@@ -119,28 +119,35 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
     console.error('No webhook URL configured, skipping notification');
     return;
   }
-  
-  try {
-    const response = await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Evernote-Source': 'mcp-evernote-polling',
-      },
-      body: JSON.stringify({
-        source: 'mcp-evernote',
-        timestamp: new Date().toISOString(),
-        changes,
-      }),
-    });
-    
-    if (!response.ok) {
-      console.error(`Webhook notification failed: ${response.status} ${response.statusText}`);
-    } else {
-      console.error(`Webhook notification sent successfully: ${changes.length} changes`);
+
+  // Send one webhook per change for cleaner workflow processing
+  for (const change of changes) {
+    try {
+      const response = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Evernote-Source': 'mcp-evernote-polling',
+        },
+        body: JSON.stringify({
+          source: 'mcp-evernote',
+          timestamp: new Date().toISOString(),
+          changes: [change], // Single change per webhook
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`Webhook notification failed for ${change.guid}: ${response.status} ${response.statusText}`);
+      } else {
+        console.error(`Webhook notification sent: ${change.type} - ${change.title || change.guid}`);
+      }
+    } catch (error: any) {
+      console.error(`Webhook notification error for ${change.guid}: ${error.message}`);
     }
-  } catch (error: any) {
-    console.error(`Webhook notification error: ${error.message}`);
+  }
+
+  if (changes.length > 0) {
+    console.error(`Webhook notifications complete: ${changes.length} changes sent`);
   }
 }
 
@@ -920,7 +927,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { guid, includeContent = true } = args as any;
         const note = await evernoteApi.getNote(guid, includeContent, includeContent);
         
-        let result: any = {
+        const result: any = {
           guid: note.guid,
           title: note.title,
           created: new Date(note.created).toISOString(),
