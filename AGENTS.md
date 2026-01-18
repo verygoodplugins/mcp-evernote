@@ -46,6 +46,13 @@ Model Context Protocol (MCP) server that integrates with Evernote for note, note
 - After making behavioral changes, run `npm test` and fix failures before stopping.
 - Prefer narrower test runs while iterating (`npm run test:unit`, etc.), but ensure the full suite (`npm test`) is green before declaring success.
 
+## Branching & Releases (Railway Deploys From `main`)
+
+- Treat `main` as **stable** (Railway template users auto-deploy from it).
+- Do day-to-day work via PRs into `develop`.
+- When ready to ship to users: open a PR from `develop` → `main` and merge it.
+- Release Please runs on `main`; merge the Release Please PR when you’re ready to tag/publish.
+
 <!-- BEGIN AUTOMEM RULES -->
 ## Memory-First Development (AutoMem)
 
@@ -86,4 +93,3 @@ Include: `mcp-evernote` + platform tag (e.g., `cursor`/`codex`) + component + cu
 ### Failure Handling
 If memory tools fail or return nothing, continue without mentioning it; memory is an enhancement, not a blocker.
 <!-- END AUTOMEM RULES -->
-
