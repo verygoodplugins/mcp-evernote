@@ -544,7 +544,7 @@ describe('MCP Tools Integration', () => {
             return Promise.resolve(Buffer.from('fake-image-data'));
           }
           if (path.includes('.evernote-token.json')) {
-            return Promise.resolve(JSON.stringify({ oauthToken: 'test-token', oauthTokenSecret: 'test-secret' }));
+            return Promise.resolve(JSON.stringify(sampleTokens));
           }
           return Promise.reject(new Error('File not found'));
         });
