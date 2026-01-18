@@ -1,4 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
+import { sampleRecognitionXml } from '../mocks/evernote.mock';
 
 /**
  * Unit tests for Recognition XML parsing logic.
@@ -9,23 +10,6 @@ import { describe, it, expect } from '@jest/globals';
  * The actual parsing implementation is tested via integration tests
  * in mcp-tools.test.ts through the evernote_get_resource_recognition tool.
  */
-
-// Sample recognition XML for testing structure expectations
-const sampleRecognitionXml = `<?xml version="1.0" encoding="UTF-8"?>
-<recoIndex docType="unknown" objType="image" objID="resource-guid-123" engineVersion="5.5.10.4" recoType="service" langType="en" objWidth="800" objHeight="600">
-  <item x="50" y="100" w="200" h="30">
-    <t w="95">Hello</t>
-    <t w="80">Helio</t>
-    <t w="65">Helo</t>
-  </item>
-  <item x="50" y="150" w="250" h="30">
-    <t w="98">World</t>
-    <t w="75">Warld</t>
-  </item>
-  <item x="50" y="200" w="300" h="30">
-    <t w="92">Testing OCR</t>
-  </item>
-</recoIndex>`;
 
 describe('Recognition XML Parsing', () => {
   describe('XML Structure Validation', () => {
