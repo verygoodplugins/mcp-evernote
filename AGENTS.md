@@ -63,7 +63,7 @@ Recall for project context, architecture/decisions, debugging, refactors, integr
 
 Example:
 ```javascript
-mcp_memory_recall_memory({
+mcp__memory__recall_memory({
   query: "<current task>",
   tags: ["mcp-evernote"],
   limit: 5
@@ -74,13 +74,15 @@ mcp_memory_recall_memory({
 Store only high-signal items (decisions, root causes, reusable patterns, preferences). Avoid noise and never store secrets.
 
 ```javascript
-mcp_memory_store_memory({
+mcp__memory__store_memory({
   content: "Brief title. Context and details. Impact/outcome.",
-  type: "Insight", // Decision | Pattern | Preference | Style | Habit | Context
-  confidence: 0.95,
-  tags: ["mcp-evernote", "<component>", "<platform>", "YYYY-MM"],
+  tags: ["mcp-evernote", "<platform>", "<component>", "YYYY-MM"],
   importance: 0.8,
-  metadata: { files_modified: ["src/index.ts"] }
+  metadata: {
+    type: "Insight", // Decision | Pattern | Preference | Style | Habit | Context
+    confidence: 0.95,
+    files_modified: ["src/index.ts"]
+  }
 })
 ```
 
