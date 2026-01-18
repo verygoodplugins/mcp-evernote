@@ -54,7 +54,7 @@ The simplest way - no need to install anything globally:
 npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 
 # For Claude Code - Just add the server
-claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote -c mcp-evernote"
+claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote mcp-evernote"
 ```
 
 ## Change Notifications
