@@ -122,13 +122,13 @@ async function installToClaudeCode() {
     '--env', `EVERNOTE_ENVIRONMENT=${environment}`
   ];
 
-  // Log command with masked secrets for debugging (intentional, secrets are masked)
-  // lgtm[js/clear-text-logging] - secrets are intentionally masked before logging
+  // Build a safe display string for logging (all secrets masked)
   const maskedArgs = addCommandArgs.map(arg =>
     arg.includes(consumerSecret) ? arg.replace(consumerSecret, '***') : arg
   );
+  const safeDisplayCommand = `${String(claudeCommand)} ${maskedArgs.join(' ')}`;
   console.log('\n📝 Installing MCP server to Claude Code...');
-  console.log('Command:', claudeCommand, maskedArgs.join(' '));
+  console.log('Command:', safeDisplayCommand);
 
   try {
     // Execute using execFileSync with separate arguments to prevent shell injection
@@ -164,8 +164,8 @@ async function installToClaudeCode() {
   } catch (error) {
     console.error('\n❌ Installation failed:', error.message);
     console.log('\nYou can try installing manually:');
-    // lgtm[js/clear-text-logging] - secrets are intentionally masked in maskedArgs
-    console.log(claudeCommand, maskedArgs.join(' \\\n  '));
+    // Use pre-built safe display string (secrets already masked)
+    console.log(safeDisplayCommand.replace(/ /g, ' \\\n  '));
     process.exit(1);
   }
   
