@@ -4,8 +4,11 @@ import {
   mockUserStore,
   resetMocks,
   sampleNote,
+  sampleNoteMetadata,
+  sampleNoteWithLongContent,
   sampleNotebook,
   sampleTag,
+  sampleTag2,
   sampleUser,
   sampleResource,
   sampleResourceWithoutData,
@@ -250,10 +253,165 @@ describe('MCP Tools Integration', () => {
 
       expect(mockNoteStore.findNotesMetadata).toHaveBeenCalledTimes(1);
       expect(result.content[0].type).toBe('text');
-      
+
       const searchData = JSON.parse(result.content[0].text);
       expect(searchData).toHaveProperty('totalNotes', 1);
       expect(searchData.notes).toHaveLength(1);
+    });
+
+    it('should include enhanced metadata in search results', async () => {
+      const searchResult = {
+        totalNotes: 1,
+        notes: [sampleNoteMetadata]
+      };
+      mockNoteStore.findNotesMetadata.mockResolvedValue(searchResult);
+      mockNoteStore.listTags.mockResolvedValue([sampleTag, sampleTag2]);
+
+      const request = {
+        params: {
+          name: 'evernote_search_notes',
+          arguments: {
+            query: 'test query',
+            maxResults: 10
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(result.content[0].type).toBe('text');
+
+      const searchData = JSON.parse(result.content[0].text);
+      expect(searchData.notes).toHaveLength(1);
+
+      const note = searchData.notes[0];
+      // Check enhanced metadata fields
+      expect(note).toHaveProperty('contentLength', 1500);
+      expect(note).toHaveProperty('notebookGuid', 'notebook-guid-123');
+      expect(note).toHaveProperty('tags');
+      expect(note.tags).toContain('test-tag');
+      expect(note.tags).toContain('another-tag');
+      expect(note).toHaveProperty('sourceURL', 'https://example.com/source');
+      expect(note).toHaveProperty('author', 'Test Author');
+    });
+
+    it('should include content preview when requested', async () => {
+      const searchResult = {
+        totalNotes: 1,
+        notes: [sampleNoteMetadata]
+      };
+      mockNoteStore.findNotesMetadata.mockResolvedValue(searchResult);
+      mockNoteStore.listTags.mockResolvedValue([sampleTag, sampleTag2]);
+      mockNoteStore.getNote.mockResolvedValue(sampleNoteWithLongContent);
+
+      const request = {
+        params: {
+          name: 'evernote_search_notes',
+          arguments: {
+            query: 'test query',
+            maxResults: 10,
+            includePreview: true
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      // Should fetch content for preview
+      expect(mockNoteStore.getNote).toHaveBeenCalledWith('note-guid-123', true, false, false, false);
+
+      const searchData = JSON.parse(result.content[0].text);
+      const note = searchData.notes[0];
+      expect(note).toHaveProperty('preview');
+      expect(note.preview).toContain('This is a longer note');
+    });
+
+    it('should not include preview when not requested', async () => {
+      const searchResult = {
+        totalNotes: 1,
+        notes: [sampleNoteMetadata]
+      };
+      mockNoteStore.findNotesMetadata.mockResolvedValue(searchResult);
+      mockNoteStore.listTags.mockResolvedValue([sampleTag, sampleTag2]);
+
+      const request = {
+        params: {
+          name: 'evernote_search_notes',
+          arguments: {
+            query: 'test query',
+            maxResults: 10,
+            includePreview: false
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      // Should NOT fetch content for preview
+      expect(mockNoteStore.getNote).not.toHaveBeenCalled();
+
+      const searchData = JSON.parse(result.content[0].text);
+      const note = searchData.notes[0];
+      expect(note).not.toHaveProperty('preview');
+    });
+
+    it('should handle notes without tags', async () => {
+      const noteWithoutTags = {
+        ...sampleNoteMetadata,
+        tagGuids: []
+      };
+      const searchResult = {
+        totalNotes: 1,
+        notes: [noteWithoutTags]
+      };
+      mockNoteStore.findNotesMetadata.mockResolvedValue(searchResult);
+
+      const request = {
+        params: {
+          name: 'evernote_search_notes',
+          arguments: {
+            query: 'test query'
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      // Should not call listTags if no notes have tags
+      expect(mockNoteStore.listTags).not.toHaveBeenCalled();
+
+      const searchData = JSON.parse(result.content[0].text);
+      const note = searchData.notes[0];
+      expect(note).not.toHaveProperty('tags');
+    });
+
+    it('should handle preview fetch errors gracefully', async () => {
+      const searchResult = {
+        totalNotes: 1,
+        notes: [sampleNoteMetadata]
+      };
+      mockNoteStore.findNotesMetadata.mockResolvedValue(searchResult);
+      mockNoteStore.listTags.mockResolvedValue([sampleTag, sampleTag2]);
+      mockNoteStore.getNote.mockRejectedValue(new Error('Note access denied'));
+
+      const request = {
+        params: {
+          name: 'evernote_search_notes',
+          arguments: {
+            query: 'test query',
+            includePreview: true
+          }
+        }
+      };
+
+      // Should not throw, just skip the preview
+      const result = await callToolHandler(request);
+
+      const searchData = JSON.parse(result.content[0].text);
+      const note = searchData.notes[0];
+      // Note should still be included, just without preview
+      expect(note).toHaveProperty('guid', 'note-guid-123');
+      expect(note).not.toHaveProperty('preview');
     });
   });
 

@@ -119,6 +119,39 @@ export const sampleNote = {
   resources: [],
 };
 
+// Sample note metadata for search results (includes more fields)
+export const sampleNoteMetadata = {
+  guid: 'note-guid-123',
+  title: 'Test Note',
+  content: null, // Search results don't include content by default
+  created: Date.now(),
+  updated: Date.now(),
+  contentLength: 1500,
+  notebookGuid: 'notebook-guid-123',
+  tagGuids: ['tag-guid-123', 'tag-guid-456'],
+  attributes: {
+    sourceURL: 'https://example.com/source',
+    author: 'Test Author',
+  },
+};
+
+// Sample note for preview testing (includes content)
+export const sampleNoteWithLongContent = {
+  guid: 'note-guid-123',
+  title: 'Test Note',
+  content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note><div>This is a longer note with some interesting content that will be truncated when generating a preview. The preview should show only the first few hundred characters and end with an ellipsis.</div></en-note>',
+  created: Date.now(),
+  updated: Date.now(),
+};
+
+// Additional sample tags for search preview testing
+export const sampleTag2 = {
+  guid: 'tag-guid-456',
+  name: 'another-tag',
+  parentGuid: null,
+  updateSequenceNum: 2,
+};
+
 export const sampleNotebook = {
   guid: 'notebook-guid-123',
   name: 'Test Notebook',

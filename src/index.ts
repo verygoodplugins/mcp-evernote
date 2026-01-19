@@ -356,7 +356,7 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_search_notes',
-    description: 'Search for notes in Evernote',
+    description: 'Search for notes in Evernote with optional content preview',
     inputSchema: {
       type: 'object',
       properties: {
@@ -372,6 +372,11 @@ const tools: Tool[] = [
           type: 'number',
           description: 'Maximum number of results (default: 20, max: 100)',
           default: 20,
+        },
+        includePreview: {
+          type: 'boolean',
+          description: 'Include first ~300 chars of note content as plain text preview (requires extra API calls)',
+          default: false,
         },
       },
       required: ['query'],
@@ -885,8 +890,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_search_notes': {
-        const { query, notebookName, maxResults = 20 } = args as any;
-        
+        const { query, notebookName, maxResults = 20, includePreview = false } = args as any;
+
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
         if (notebookName) {
@@ -903,11 +908,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           maxNotes: Math.min(maxResults, 100),
         });
 
-        const notes = results.notes.map((note: any) => ({
-          guid: note.guid,
-          title: note.title,
-          created: new Date(note.created).toISOString(),
-          updated: new Date(note.updated).toISOString(),
+        // Build tag lookup map (tagGuid -> tagName) - single API call
+        let tagMap: Map<string, string> | undefined;
+        const hasAnyTags = results.notes.some((note: any) => note.tagGuids && note.tagGuids.length > 0);
+        if (hasAnyTags) {
+          const tags = await evernoteApi.listTags();
+          tagMap = new Map(tags.map(t => [t.guid!, t.name!]));
+        }
+
+        // Build enhanced note results
+        const notes = await Promise.all(results.notes.map(async (note: any) => {
+          const enhanced: any = {
+            guid: note.guid,
+            title: note.title,
+            created: new Date(note.created).toISOString(),
+            updated: new Date(note.updated).toISOString(),
+            contentLength: note.contentLength,
+            notebookGuid: note.notebookGuid,
+          };
+
+          // Resolve tag names from GUIDs
+          if (note.tagGuids && note.tagGuids.length > 0 && tagMap) {
+            enhanced.tags = note.tagGuids
+              .map((guid: string) => tagMap!.get(guid))
+              .filter(Boolean);
+          }
+
+          // Include useful attributes if present
+          if (note.attributes) {
+            if (note.attributes.sourceURL) {
+              enhanced.sourceURL = note.attributes.sourceURL;
+            }
+            if (note.attributes.author) {
+              enhanced.author = note.attributes.author;
+            }
+          }
+
+          // Fetch content preview if requested
+          if (includePreview) {
+            try {
+              const preview = await evernoteApi.getNotePreview(note.guid, 300);
+              if (preview) {
+                enhanced.preview = preview;
+              }
+            } catch (e) {
+              // Skip preview on error, don't fail the whole search
+              console.error(`Failed to get preview for note ${note.guid}: ${(e as Error).message}`);
+            }
+          }
+
+          return enhanced;
         }));
 
         return {
