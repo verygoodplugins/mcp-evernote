@@ -15,6 +15,8 @@ import {
   RecognitionData,
   RecognitionItem,
   ResourceInfo,
+  NoteReplacement,
+  PatchNoteResult,
 } from './types.js';
 import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
@@ -127,6 +129,79 @@ export class EvernoteAPI {
 
   async deleteNote(guid: string): Promise<void> {
     await this.noteStore.deleteNote(guid);
+  }
+
+  async patchNoteContent(guid: string, replacements: NoteReplacement[]): Promise<PatchNoteResult> {
+    // Fetch existing note with content and resources
+    const note = await this.getNote(guid, true, true);
+
+    // Convert ENML to markdown
+    let markdown = this.convertENMLToMarkdown(note.content, note.resources);
+
+    // Track changes
+    const changes: PatchNoteResult['changes'] = [];
+
+    // Apply replacements sequentially
+    for (const replacement of replacements) {
+      const { find, replace, replaceAll = true } = replacement;
+
+      // Count occurrences
+      const regex = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      const matches = markdown.match(regex);
+      const occurrences = matches ? matches.length : 0;
+
+      // Perform replacement
+      let replaced = 0;
+      if (occurrences > 0) {
+        if (replaceAll) {
+          markdown = markdown.split(find).join(replace);
+          replaced = occurrences;
+        } else {
+          markdown = markdown.replace(find, replace);
+          replaced = 1;
+        }
+      }
+
+      changes.push({
+        find,
+        occurrences,
+        replaced,
+      });
+    }
+
+    // Check if any changes were made
+    const totalReplaced = changes.reduce((sum, c) => sum + c.replaced, 0);
+    if (totalReplaced === 0) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes,
+        warning: 'No matches found for any replacement patterns',
+      };
+    }
+
+    // Check if content would be empty after replacement
+    const trimmedMarkdown = markdown.trim();
+    if (!trimmedMarkdown) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes,
+        warning: 'Replacement would result in empty note content - operation aborted',
+      };
+    }
+
+    // Apply updated markdown back to note (preserves resources)
+    await this.applyMarkdownToNote(note, markdown);
+
+    // Update the note
+    await this.updateNote(note);
+
+    return {
+      success: true,
+      noteGuid: guid,
+      changes,
+    };
   }
 
   async searchNotes(params: SearchParameters): Promise<any> {

@@ -193,3 +193,20 @@ export interface ResourceInfo {
   hash: string;
   hasRecognition: boolean;
 }
+
+export interface NoteReplacement {
+  find: string;
+  replace: string;
+  replaceAll?: boolean;
+}
+
+export interface PatchNoteResult {
+  success: boolean;
+  noteGuid: string;
+  changes: Array<{
+    find: string;
+    occurrences: number;
+    replaced: number;
+  }>;
+  warning?: string;
+}

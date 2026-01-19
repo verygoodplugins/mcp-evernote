@@ -771,6 +771,162 @@ describe('MCP Tools Integration', () => {
     });
   });
 
+  describe('Patch Note Operations', () => {
+    const sampleNoteWithContent = {
+      ...sampleNote,
+      content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>Status: Pending<br/>Task: TODO: Review code<br/>Priority: High</en-note>'
+    };
+
+    beforeEach(() => {
+      mockNoteStore.getNote.mockResolvedValue(sampleNoteWithContent);
+      mockNoteStore.updateNote.mockImplementation((note: any) => Promise.resolve(note));
+    });
+
+    it('should patch note with single replacement', async () => {
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: [
+              { find: 'Status: Pending', replace: 'Status: Complete' }
+            ]
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(mockNoteStore.getNote).toHaveBeenCalledWith('note-123', true, true, false, false);
+      expect(mockNoteStore.updateNote).toHaveBeenCalled();
+      expect(result.content[0].text).toContain('Note patched successfully');
+      expect(result.content[0].text).toContain('found 1x');
+      expect(result.content[0].text).toContain('replaced 1x');
+    });
+
+    it('should patch note with multiple replacements', async () => {
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: [
+              { find: 'Status: Pending', replace: 'Status: Complete' },
+              { find: 'TODO:', replace: 'DONE:' }
+            ]
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(result.content[0].text).toContain('Note patched successfully');
+    });
+
+    it('should return warning when no matches found', async () => {
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: [
+              { find: 'Nonexistent text', replace: 'Replacement' }
+            ]
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(result.content[0].text).toContain('Note patch failed');
+      expect(result.content[0].text).toContain('No matches found');
+      expect(mockNoteStore.updateNote).not.toHaveBeenCalled();
+    });
+
+    it('should replace only first occurrence when replaceAll is false', async () => {
+      const noteWithDuplicates = {
+        ...sampleNote,
+        content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>TODO: First task<br/>TODO: Second task</en-note>'
+      };
+      mockNoteStore.getNote.mockResolvedValue(noteWithDuplicates);
+
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: [
+              { find: 'TODO:', replace: 'DONE:', replaceAll: false }
+            ]
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(result.content[0].text).toContain('found 2x');
+      expect(result.content[0].text).toContain('replaced 1x');
+    });
+
+    it('should reject patch that would result in empty content', async () => {
+      const noteWithMinimalContent = {
+        ...sampleNote,
+        content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>Only content</en-note>'
+      };
+      mockNoteStore.getNote.mockResolvedValue(noteWithMinimalContent);
+
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: [
+              { find: 'Only content', replace: '' }
+            ]
+          }
+        }
+      };
+
+      const result = await callToolHandler(request);
+
+      expect(result.content[0].text).toContain('Note patch failed');
+      expect(result.content[0].text).toContain('empty note content');
+      expect(mockNoteStore.updateNote).not.toHaveBeenCalled();
+    });
+
+    it('should throw error when no replacements provided', async () => {
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'note-123',
+            replacements: []
+          }
+        }
+      };
+
+      await expect(callToolHandler(request)).rejects.toThrow('At least one replacement must be provided');
+    });
+
+    it('should handle note not found error', async () => {
+      mockNoteStore.getNote.mockRejectedValue(new Error('Note not found'));
+
+      const request = {
+        params: {
+          name: 'evernote_patch_note',
+          arguments: {
+            guid: 'nonexistent-guid',
+            replacements: [
+              { find: 'test', replace: 'replacement' }
+            ]
+          }
+        }
+      };
+
+      await expect(callToolHandler(request)).rejects.toThrow('Note not found');
+    });
+  });
+
   describe('Error Handling', () => {
     it('should handle unknown tool error', async () => {
       const request = {
