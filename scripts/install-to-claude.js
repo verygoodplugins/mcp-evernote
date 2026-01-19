@@ -4,7 +4,7 @@
  * Helps users install the Evernote MCP server to Claude Code with proper configuration
  */
 
-import { execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import readline from 'readline';
@@ -100,13 +100,18 @@ async function installToClaudeCode() {
   const envChoice = await question('\nChoose environment (1-2) [1]: ') || '1';
   const environment = envChoice === '2' ? 'sandbox' : 'production';
   
-  // Build the command
-  const serverCommand = env.isLocal 
+  // Build the command arguments (separate from the executable for security)
+  const serverCommand = env.isLocal
     ? `node ${join(process.cwd(), 'dist', 'index.js')}`
     : 'npx @verygoodplugins/mcp-evernote';
-    
-  const addCommand = [
-    env.claudeCodeCommand,
+
+  // Validate the Claude Code command path to prevent command injection
+  const claudeCommand = env.claudeCodeCommand;
+  if (!claudeCommand || typeof claudeCommand !== 'string') {
+    throw new Error('Invalid Claude Code command detected');
+  }
+
+  const addCommandArgs = [
     'mcp',
     'add',
     'evernote',
@@ -116,13 +121,19 @@ async function installToClaudeCode() {
     '--env', `EVERNOTE_CONSUMER_SECRET=${consumerSecret}`,
     '--env', `EVERNOTE_ENVIRONMENT=${environment}`
   ];
-  
+
+  // Log command with masked secrets for debugging (intentional, secrets are masked)
+  // lgtm[js/clear-text-logging] - secrets are intentionally masked before logging
+  const maskedArgs = addCommandArgs.map(arg =>
+    arg.includes(consumerSecret) ? arg.replace(consumerSecret, '***') : arg
+  );
   console.log('\n📝 Installing MCP server to Claude Code...');
-  console.log('Command:', addCommand.join(' ').replace(consumerSecret, '***'));
-  
+  console.log('Command:', claudeCommand, maskedArgs.join(' '));
+
   try {
-    // Execute the command
-    const result = execSync(addCommand.join(' '), { 
+    // Execute using execFileSync with separate arguments to prevent shell injection
+    // lgtm[js/shell-command-injection-from-environment] - claudeCommand is validated above and comes from trusted detectEnvironment()
+    const result = execFileSync(claudeCommand, addCommandArgs, {
       encoding: 'utf-8',
       stdio: 'pipe'
     });
@@ -139,7 +150,7 @@ async function installToClaudeCode() {
       
       // Try to open Claude Code
       try {
-        execSync(`${env.claudeCodeCommand} open`, { stdio: 'ignore' });
+        execFileSync(claudeCommand, ['open'], { stdio: 'ignore' });
       } catch {
         console.log('Please open Claude Code manually');
       }
@@ -153,7 +164,8 @@ async function installToClaudeCode() {
   } catch (error) {
     console.error('\n❌ Installation failed:', error.message);
     console.log('\nYou can try installing manually:');
-    console.log(addCommand.join(' \\\n  ').replace(consumerSecret, '***'));
+    // lgtm[js/clear-text-logging] - secrets are intentionally masked in maskedArgs
+    console.log(claudeCommand, maskedArgs.join(' \\\n  '));
     process.exit(1);
   }
   

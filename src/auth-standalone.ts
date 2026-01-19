@@ -161,11 +161,16 @@ async function performOAuth(credentials: Credentials) {
       
       // Step 2: Set up callback server
       app.get('/oauth/callback', async (req, res) => {
-        const { oauth_verifier } = req.query;
-        
         console.log('\n📥 Received OAuth callback');
-        
-        if (!oauth_verifier) {
+
+        // Validate and extract OAuth verifier from query params
+        // This is a standard OAuth1 callback parameter, not user-controlled sensitive data
+        // lgtm[js/sensitive-get-query] - OAuth1 verifier must come from query string per spec
+        const oauthVerifier = typeof req.query.oauth_verifier === 'string'
+          ? req.query.oauth_verifier
+          : null;
+
+        if (!oauthVerifier || oauthVerifier.length === 0) {
           res.send('❌ OAuth verification failed - no verifier received');
           server.close();
           reject(new Error('OAuth verification failed'));
@@ -176,7 +181,7 @@ async function performOAuth(credentials: Credentials) {
         client.getAccessToken(
           oauthToken,
           oauthTokenSecret,
-          oauth_verifier as string,
+          oauthVerifier,
           async (error: any, accessToken: string, _accessTokenSecret: string, results: any) => {
             if (error) {
               res.send(`❌ Failed to get access token: ${error.message}`);
@@ -311,14 +316,18 @@ async function main() {
     console.log('1. Add the following to your Claude Desktop config:');
     console.log('   Location: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)');
     console.log('             %APPDATA%\\Claude\\claude_desktop_config.json (Windows)\n');
+    // Mask credentials in the example output for security
+    // lgtm[js/clear-text-logging] - credentials are intentionally masked before logging
+    const maskedKey = credentials.consumerKey.substring(0, 4) + '***';
+    const maskedSecret = '***' + credentials.consumerSecret.substring(credentials.consumerSecret.length - 4);
     console.log(JSON.stringify({
       mcpServers: {
         evernote: {
           command: "npx",
           args: ["@verygoodplugins/mcp-evernote"],
           env: {
-            EVERNOTE_CONSUMER_KEY: credentials.consumerKey,
-            EVERNOTE_CONSUMER_SECRET: credentials.consumerSecret,
+            EVERNOTE_CONSUMER_KEY: `${maskedKey} (use your actual key)`,
+            EVERNOTE_CONSUMER_SECRET: `${maskedSecret} (use your actual secret)`,
             EVERNOTE_ENVIRONMENT: credentials.environment
           }
         }
