@@ -163,11 +163,10 @@ async function performOAuth(credentials: Credentials) {
       app.get('/oauth/callback', async (req, res) => {
         console.log('\n📥 Received OAuth callback');
 
-        // Extract OAuth verifier from query params (standard OAuth1 callback flow)
-        // The verifier is a one-time code from Evernote's OAuth server, not user credentials
-        const queryParams = req.query as Record<string, unknown>;
-        const verifierParam = queryParams['oauth_verifier'];
-        const oauthVerifier = typeof verifierParam === 'string' ? verifierParam : null;
+        // Extract OAuth verifier from URL (standard OAuth1 callback flow)
+        // The verifier is a one-time authorization code from Evernote's OAuth server
+        const requestUrl = new URL(req.url || '', `http://${req.headers.host}`);
+        const oauthVerifier = requestUrl.searchParams.get('oauth_verifier');
 
         if (!oauthVerifier || oauthVerifier.length === 0) {
           res.send('❌ OAuth verification failed - no verifier received');

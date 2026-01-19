@@ -122,13 +122,13 @@ async function installToClaudeCode() {
     '--env', `EVERNOTE_ENVIRONMENT=${environment}`
   ];
 
-  // Build a safe display string for logging (all secrets masked)
+  // Build masked arguments for display (secrets replaced with ***)
   const maskedArgs = addCommandArgs.map(arg =>
     arg.includes(consumerSecret) ? arg.replace(consumerSecret, '***') : arg
   );
-  const safeDisplayCommand = `${String(claudeCommand)} ${maskedArgs.join(' ')}`;
   console.log('\n📝 Installing MCP server to Claude Code...');
-  console.log('Command:', safeDisplayCommand);
+  // Log command with hardcoded name and masked args (no env data in output)
+  console.log('Command: claude', maskedArgs.join(' '));
 
   try {
     // Execute using execFileSync with separate arguments to prevent shell injection
@@ -164,8 +164,8 @@ async function installToClaudeCode() {
   } catch (error) {
     console.error('\n❌ Installation failed:', error.message);
     console.log('\nYou can try installing manually:');
-    // Use pre-built safe display string (secrets already masked)
-    console.log(safeDisplayCommand.replace(/ /g, ' \\\n  '));
+    // Log with hardcoded command name and masked args
+    console.log('claude', maskedArgs.join(' \\\n  '));
     process.exit(1);
   }
   
