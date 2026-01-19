@@ -122,13 +122,9 @@ async function installToClaudeCode() {
     '--env', `EVERNOTE_ENVIRONMENT=${environment}`
   ];
 
-  // Build masked arguments for display (secrets replaced with ***)
-  const maskedArgs = addCommandArgs.map(arg =>
-    arg.includes(consumerSecret) ? arg.replace(consumerSecret, '***') : arg
-  );
   console.log('\n📝 Installing MCP server to Claude Code...');
-  // Log command with hardcoded name and masked args (no env data in output)
-  console.log('Command: claude', maskedArgs.join(' '));
+  // Log command template without any env-derived data
+  console.log('Command: claude mcp add evernote <server> --scope', scope, '--env EVERNOTE_CONSUMER_KEY=*** --env EVERNOTE_CONSUMER_SECRET=*** --env EVERNOTE_ENVIRONMENT=' + environment);
 
   try {
     // Execute using execFileSync with separate arguments to prevent shell injection
@@ -164,8 +160,7 @@ async function installToClaudeCode() {
   } catch (error) {
     console.error('\n❌ Installation failed:', error.message);
     console.log('\nYou can try installing manually:');
-    // Log with hardcoded command name and masked args
-    console.log('claude', maskedArgs.join(' \\\n  '));
+    console.log('claude mcp add evernote <command> --scope <scope> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret> --env EVERNOTE_ENVIRONMENT=<env>');
     process.exit(1);
   }
   
