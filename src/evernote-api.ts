@@ -196,6 +196,27 @@ export class EvernoteAPI {
   }
 
   async patchNoteContent(guid: string, replacements: NoteReplacement[]): Promise<PatchNoteResult> {
+    // Validate inputs before performing I/O
+    if (!replacements || replacements.length === 0) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes: [],
+        warning: 'No replacements provided',
+      };
+    }
+
+    for (const replacement of replacements) {
+      if (!replacement.find || typeof replacement.find !== 'string' || replacement.find.length === 0) {
+        return {
+          success: false,
+          noteGuid: guid,
+          changes: [],
+          warning: 'Empty find string in replacements',
+        };
+      }
+    }
+
     // Fetch existing note with content and resources
     const note = await this.getNote(guid, true, true);
 
