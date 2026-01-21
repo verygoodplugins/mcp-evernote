@@ -120,7 +120,7 @@ export class EvernoteAPI {
    */
   private enmlToPlainText(enmlContent: string): string {
     // Parse the ENML/HTML content
-    const $ = cheerio.load(enmlContent, { decodeEntities: true });
+    const $ = cheerio.load(enmlContent);
 
     // Remove en-media tags (attachments) from the DOM
     $('en-media').remove();
