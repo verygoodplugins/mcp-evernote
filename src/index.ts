@@ -719,6 +719,44 @@ const tools: Tool[] = [
       required: ['guid'],
     },
   },
+  // Patch note tool for targeted find-and-replace updates
+  {
+    name: 'evernote_patch_note',
+    description: 'Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'Note GUID',
+        },
+        replacements: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              find: {
+                type: 'string',
+                description: 'Text to find (exact match)',
+              },
+              replace: {
+                type: 'string',
+                description: 'Replacement text',
+              },
+              replaceAll: {
+                type: 'boolean',
+                description: 'Replace all occurrences (default: true)',
+                default: true,
+              },
+            },
+            required: ['find', 'replace'],
+          },
+          description: 'Array of find-and-replace operations to apply',
+        },
+      },
+      required: ['guid', 'replacements'],
+    },
+  },
 ];
 
 // List tools handler
@@ -1396,6 +1434,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'evernote_patch_note': {
+        const { guid, replacements } = args as any;
+
+        if (!replacements || !Array.isArray(replacements) || replacements.length === 0) {
+          throw new Error('At least one replacement must be provided');
+        }
+
+        // Validate each replacement has a non-empty find string
+        for (const r of replacements) {
+          if (!r.find || typeof r.find !== 'string' || r.find.length === 0) {
+            throw new Error('Each replacement must have a non-empty "find" string');
+          }
+        }
+
+        const result = await evernoteApi.patchNoteContent(guid, replacements);
+
+        // Format the response
+        const changesSummary = result.changes
+          .map(c => `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`)
+          .join('\n');
+
+        if (result.success) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
+              },
+            ],
+          };
+        }
       }
 
       case 'evernote_health_check': {
