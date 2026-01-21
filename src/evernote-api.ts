@@ -20,6 +20,7 @@ import {
 } from './types.js';
 import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
+import * as cheerio from 'cheerio';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -113,30 +114,22 @@ export class EvernoteAPI {
 
   /**
    * Convert ENML content to plain text by stripping all XML/HTML tags.
+   *
+   * This implementation uses an HTML parser instead of regular expressions
+   * to avoid incomplete multi-character sanitization issues.
    */
   private enmlToPlainText(enmlContent: string): string {
-    // Remove XML declaration and DOCTYPE
-    let text = enmlContent.replace(/<\?xml[^?]*\?>/gi, '');
-    text = text.replace(/<!DOCTYPE[^>]*>/gi, '');
+    // Parse the ENML/HTML content
+    const $ = cheerio.load(enmlContent, { decodeEntities: true });
 
-    // Remove en-media tags (attachments)
-    text = text.replace(/<en-media[^>]*\/?>/gi, '');
+    // Remove en-media tags (attachments) from the DOM
+    $('en-media').remove();
 
-    // Replace common block elements with newlines
-    text = text.replace(/<\/?(div|p|br|li|h[1-6])[^>]*>/gi, '\n');
+    // Extract text content (HTML/XML tags are not included)
+    let text = $.text();
 
-    // Remove all remaining HTML/XML tags
-    text = text.replace(/<[^>]+>/g, '');
-
-    // Decode common HTML entities (decode &amp; LAST to avoid double-unescaping)
-    text = text.replace(/&nbsp;/gi, ' ');
-    text = text.replace(/&lt;/gi, '<');
-    text = text.replace(/&gt;/gi, '>');
-    text = text.replace(/&quot;/gi, '"');
-    text = text.replace(/&#39;/gi, "'");
-    text = text.replace(/&amp;/gi, '&');
-
-    // Normalize whitespace
+    // Normalize whitespace similar to the original implementation
+    text = text.replace(/\r\n/g, '\n');
     text = text.replace(/\n\s*\n/g, '\n');
     text = text.replace(/[ \t]+/g, ' ');
     text = text.trim();
