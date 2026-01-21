@@ -135,9 +135,6 @@ export class EvernoteAPI {
     // Fetch existing note with content and resources
     const note = await this.getNote(guid, true, true);
 
-    // Preserve original resources before markdown conversion
-    const originalResources = note.resources ? [...note.resources] : [];
-
     // Convert ENML to markdown
     let markdown = this.convertENMLToMarkdown(note.content, note.resources);
 
@@ -194,36 +191,8 @@ export class EvernoteAPI {
       };
     }
 
-    // Apply updated markdown back to note
-    await this.applyMarkdownToNote(note, markdown);
-
-    // Restore original resources - applyMarkdownToNote may have cleared them
-    // if no new attachments were added via markdown syntax
-    if (originalResources.length > 0) {
-      // Merge: keep any new attachments from applyMarkdownToNote, add back originals
-      const existingHashes = new Set(
-        (note.resources || []).map((r: any) =>
-          r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : null
-        ).filter(Boolean)
-      );
-
-      for (const resource of originalResources) {
-        const hash = resource.data?.bodyHash
-          ? Buffer.from(resource.data.bodyHash).toString('hex')
-          : null;
-        if (hash && !existingHashes.has(hash)) {
-          if (!note.resources) {
-            note.resources = [];
-          }
-          note.resources.push(resource);
-        }
-      }
-
-      // If note.resources was deleted but we have originals, restore them
-      if (!note.resources && originalResources.length > 0) {
-        note.resources = originalResources;
-      }
-    }
+    // Apply updated markdown back to note, preserving existing resources
+    await this.applyMarkdownToNote(note, markdown, { preserveResources: true });
 
     // Update the note
     await this.updateNote(note);
@@ -498,18 +467,48 @@ export class EvernoteAPI {
     return enmlToMarkdown(enmlContent, { resources: normalized });
   }
 
-  async applyMarkdownToNote(note: any, markdown: string): Promise<void> {
+  async applyMarkdownToNote(note: any, markdown: string, options?: { preserveResources?: boolean }): Promise<void> {
     const EvernoteModule = (Evernote as any).default || Evernote;
+    const originalResources = options?.preserveResources ? (note.resources || []) : [];
+
     const conversion = this.convertMarkdownToENML(markdown, note.resources);
     note.content = this.wrapEnml(conversion.enml);
     const attachmentResources = this.buildResourcesFromAttachments(
       conversion.attachments,
       EvernoteModule
     );
-    if (attachmentResources.length > 0) {
-      note.resources = attachmentResources;
-    } else if (note.resources) {
-      delete note.resources;
+
+    if (options?.preserveResources) {
+      // Merge: start with original resources, add any new attachments
+      const existingHashes = new Set(
+        originalResources.map((r: any) =>
+          r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : null
+        ).filter(Boolean)
+      );
+
+      // Add new attachments that aren't already in original resources
+      const mergedResources = [...originalResources];
+      for (const resource of attachmentResources) {
+        const hash = resource.data?.bodyHash
+          ? Buffer.from(resource.data.bodyHash).toString('hex')
+          : null;
+        if (hash && !existingHashes.has(hash)) {
+          mergedResources.push(resource);
+        }
+      }
+
+      if (mergedResources.length > 0) {
+        note.resources = mergedResources;
+      } else {
+        delete note.resources;
+      }
+    } else {
+      // Original behavior: replace resources with new attachments only
+      if (attachmentResources.length > 0) {
+        note.resources = attachmentResources;
+      } else if (note.resources) {
+        delete note.resources;
+      }
     }
   }
 
