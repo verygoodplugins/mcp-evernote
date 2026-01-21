@@ -128,13 +128,13 @@ export class EvernoteAPI {
     // Remove all remaining HTML/XML tags
     text = text.replace(/<[^>]+>/g, '');
 
-    // Decode common HTML entities
+    // Decode common HTML entities (decode &amp; LAST to avoid double-unescaping)
     text = text.replace(/&nbsp;/gi, ' ');
-    text = text.replace(/&amp;/gi, '&');
     text = text.replace(/&lt;/gi, '<');
     text = text.replace(/&gt;/gi, '>');
     text = text.replace(/&quot;/gi, '"');
     text = text.replace(/&#39;/gi, "'");
+    text = text.replace(/&amp;/gi, '&');
 
     // Normalize whitespace
     text = text.replace(/\n\s*\n/g, '\n');
