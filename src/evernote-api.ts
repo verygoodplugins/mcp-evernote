@@ -80,6 +80,70 @@ export class EvernoteAPI {
     return await this.noteStore.getNote(guid, withContent, withResources, false, false);
   }
 
+  /**
+   * Get a truncated plain text preview of a note's content.
+   * Fetches the note content and converts ENML to plain text, truncating to maxLength.
+   */
+  async getNotePreview(guid: string, maxLength: number = 300): Promise<string | null> {
+    const note = await this.noteStore.getNote(guid, true, false, false, false);
+    if (!note.content) {
+      return null;
+    }
+
+    // Convert ENML to plain text (strip all tags)
+    const plainText = this.enmlToPlainText(note.content);
+    if (!plainText || plainText.length === 0) {
+      return null;
+    }
+
+    // Truncate and add ellipsis if needed
+    if (plainText.length <= maxLength) {
+      return plainText;
+    }
+
+    // Find a good break point (word boundary)
+    let truncated = plainText.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.7) {
+      truncated = truncated.substring(0, lastSpace);
+    }
+
+    return truncated + '...';
+  }
+
+  /**
+   * Convert ENML content to plain text by stripping all XML/HTML tags.
+   */
+  private enmlToPlainText(enmlContent: string): string {
+    // Remove XML declaration and DOCTYPE
+    let text = enmlContent.replace(/<\?xml[^?]*\?>/gi, '');
+    text = text.replace(/<!DOCTYPE[^>]*>/gi, '');
+
+    // Remove en-media tags (attachments)
+    text = text.replace(/<en-media[^>]*\/?>/gi, '');
+
+    // Replace common block elements with newlines
+    text = text.replace(/<\/?(div|p|br|li|h[1-6])[^>]*>/gi, '\n');
+
+    // Remove all remaining HTML/XML tags
+    text = text.replace(/<[^>]+>/g, '');
+
+    // Decode common HTML entities
+    text = text.replace(/&nbsp;/gi, ' ');
+    text = text.replace(/&amp;/gi, '&');
+    text = text.replace(/&lt;/gi, '<');
+    text = text.replace(/&gt;/gi, '>');
+    text = text.replace(/&quot;/gi, '"');
+    text = text.replace(/&#39;/gi, "'");
+
+    // Normalize whitespace
+    text = text.replace(/\n\s*\n/g, '\n');
+    text = text.replace(/[ \t]+/g, ' ');
+    text = text.trim();
+
+    return text;
+  }
+
   async updateNote(note: any, retryCount: number = 0): Promise<any> {
     const maxRetries = 3;
     const baseDelay = 2000; // 2 seconds base delay
