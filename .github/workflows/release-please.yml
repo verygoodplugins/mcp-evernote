@@ -15,8 +15,9 @@
 #   chore/docs: no version bump
 #
 # npm Publishing:
-#   Uses Trusted Publishing (OIDC) - no secrets needed!
-#   Configure at: https://www.npmjs.com/package/@verygoodplugins/mcp-{name}/access
+#   Uses Trusted Publishing (OIDC) - no NPM_TOKEN needed!
+#   Configured at: https://www.npmjs.com/package/@verygoodplugins/mcp-evernote/access
+#   Workflow filename registered: release-please.yml
 
 name: Release Please
 
@@ -43,18 +44,24 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   npm-publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
       - run: npm ci
-      - run: npm run build --if-present
+      - run: npm run build
       - run: npm test
-      - run: npm publish
+      - run: npm publish --provenance --access public
 
   announce:
     needs: [release-please, npm-publish]
