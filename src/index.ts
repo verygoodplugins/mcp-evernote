@@ -1393,6 +1393,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error('At least one replacement must be provided');
         }
 
+        // Validate each replacement has a non-empty find string
+        for (const r of replacements) {
+          if (!r.find || typeof r.find !== 'string' || r.find.length === 0) {
+            throw new Error('Each replacement must have a non-empty "find" string');
+          }
+        }
+
         const result = await evernoteApi.patchNoteContent(guid, replacements);
 
         // Format the response

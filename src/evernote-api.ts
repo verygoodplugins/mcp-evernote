@@ -135,6 +135,9 @@ export class EvernoteAPI {
     // Fetch existing note with content and resources
     const note = await this.getNote(guid, true, true);
 
+    // Preserve original resources before markdown conversion
+    const originalResources = note.resources ? [...note.resources] : [];
+
     // Convert ENML to markdown
     let markdown = this.convertENMLToMarkdown(note.content, note.resources);
 
@@ -191,8 +194,36 @@ export class EvernoteAPI {
       };
     }
 
-    // Apply updated markdown back to note (preserves resources)
+    // Apply updated markdown back to note
     await this.applyMarkdownToNote(note, markdown);
+
+    // Restore original resources - applyMarkdownToNote may have cleared them
+    // if no new attachments were added via markdown syntax
+    if (originalResources.length > 0) {
+      // Merge: keep any new attachments from applyMarkdownToNote, add back originals
+      const existingHashes = new Set(
+        (note.resources || []).map((r: any) =>
+          r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : null
+        ).filter(Boolean)
+      );
+
+      for (const resource of originalResources) {
+        const hash = resource.data?.bodyHash
+          ? Buffer.from(resource.data.bodyHash).toString('hex')
+          : null;
+        if (hash && !existingHashes.has(hash)) {
+          if (!note.resources) {
+            note.resources = [];
+          }
+          note.resources.push(resource);
+        }
+      }
+
+      // If note.resources was deleted but we have originals, restore them
+      if (!note.resources && originalResources.length > 0) {
+        note.resources = originalResources;
+      }
+    }
 
     // Update the note
     await this.updateNote(note);
