@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.1...mcp-evernote-v1.2.2) (2026-01-21)
+
+
+### Bug Fixes
+
+* **ci:** add npm environment for trusted publishing ([070a50f](https://github.com/verygoodplugins/mcp-evernote/commit/070a50ff020a1c4fb87fcb1cee21941f1bb5a663))
+* **ci:** use Node 24 for npm 11.5.1+ OIDC support ([88e0954](https://github.com/verygoodplugins/mcp-evernote/commit/88e09542dfa7e9a0df779376275b7138675616d0))
+
 ## [1.2.1](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.0...mcp-evernote-v1.2.1) (2026-01-21)
 
 
