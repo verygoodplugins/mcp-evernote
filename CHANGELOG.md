@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.1.0...mcp-evernote-v1.2.0) (2026-01-21)
+
+
+### Features
+
+* add CI/CD, MCP Registry, and standardization ([b27df0c](https://github.com/verygoodplugins/mcp-evernote/commit/b27df0c7abf710c8ddf0ad4363ff0b34ae61cd32))
+* Add Claude Code support with automatic setup and OAuth integration ([42410db](https://github.com/verygoodplugins/mcp-evernote/commit/42410dbb12a5db21bdc7d5742709bc2c6ff16414))
+* Add interactive auth prompts and fix executable permissions ([5552395](https://github.com/verygoodplugins/mcp-evernote/commit/5552395c2565af5cd6b8d2b4792c1e7d49326ee5))
+* Add polling for Evernote changes with webhook notifications ([eea03b1](https://github.com/verygoodplugins/mcp-evernote/commit/eea03b12e4e7cdabc6fe937a57082cfcdac4c506))
+* Initial implementation of Evernote MCP server ([2b3463a](https://github.com/verygoodplugins/mcp-evernote/commit/2b3463ac0493b72fcc63110c9ce3f66701f9d53b))
+* **search:** add metadata and content preview to search results ([07ecf6c](https://github.com/verygoodplugins/mcp-evernote/commit/07ecf6cb0228d5d9d2147b66253e14f1a7b1fca6))
+* **tools:** add evernote_patch_note for targeted find-and-replace edits ([f186076](https://github.com/verygoodplugins/mcp-evernote/commit/f186076ceb33c1f10cf7e8e0e5c8a97d55f5659b))
+
+
+### Bug Fixes
+
+* Add health check tool and improve error handling for MCP server stability ([0ed4c2b](https://github.com/verygoodplugins/mcp-evernote/commit/0ed4c2b6bd1a595b4ef505ae5ef8078572695fd3))
+* **auth:** token file compatibility + release hardening ([ecc9771](https://github.com/verygoodplugins/mcp-evernote/commit/ecc9771093063e15fbbe957ca4451c865b7a1f72))
+* **auth:** write token field; support legacy accessToken tokens ([6295537](https://github.com/verygoodplugins/mcp-evernote/commit/6295537b3a9d8274b18d6d27d8e4bd6e3ee4aac2))
+* Fix ES module compatibility for Evernote SDK types ([5f0d3e5](https://github.com/verygoodplugins/mcp-evernote/commit/5f0d3e52bd130dbc4cda312db6b1b9e34f923217))
+* Separate OAuth flow for Claude Desktop compatibility ([cc9ae07](https://github.com/verygoodplugins/mcp-evernote/commit/cc9ae070b597ada38008303fbc70d67b03c73cb0))
+* **tests:** address CodeRabbit review comments ([9f4a089](https://github.com/verygoodplugins/mcp-evernote/commit/9f4a08987ec6c8ac854766c5972cabc81f17b171))
+* upgrade CodeQL Action to v4 ([4317881](https://github.com/verygoodplugins/mcp-evernote/commit/4317881f4aaebeda1f3b6429f95a7bd5f632e22e))
+
 ## [Unreleased]
 
 > Note: `v1.1.0` is the latest tagged release. The changes below are queued for the next release (expected `v1.2.0`) and will be finalized by Release Please when the release PR is merged.
