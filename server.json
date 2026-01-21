@@ -3,7 +3,7 @@
   "name": "io.github.verygoodplugins/mcp-evernote",
   "title": "MCP Evernote",
   "description": "Evernote note management with OAuth and ENML conversion",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "websiteUrl": "https://verygoodplugins.com/?utm_source=mcp-registry",
   "repository": {
     "url": "https://github.com/verygoodplugins/mcp-evernote",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@verygoodplugins/mcp-evernote",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "transport": {
         "type": "stdio"
       }
