@@ -16,3 +16,5 @@ coverage/
 .nyc_output/
 junit.xml
 test-results/
+.mcpregistry_registry_token
+.mcpregistry_github_token
