@@ -15,9 +15,12 @@ import {
   RecognitionData,
   RecognitionItem,
   ResourceInfo,
+  NoteReplacement,
+  PatchNoteResult,
 } from './types.js';
 import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
+import * as cheerio from 'cheerio';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -78,6 +81,62 @@ export class EvernoteAPI {
     return await this.noteStore.getNote(guid, withContent, withResources, false, false);
   }
 
+  /**
+   * Get a truncated plain text preview of a note's content.
+   * Fetches the note content and converts ENML to plain text, truncating to maxLength.
+   */
+  async getNotePreview(guid: string, maxLength: number = 300): Promise<string | null> {
+    const note = await this.noteStore.getNote(guid, true, false, false, false);
+    if (!note.content) {
+      return null;
+    }
+
+    // Convert ENML to plain text (strip all tags)
+    const plainText = this.enmlToPlainText(note.content);
+    if (!plainText || plainText.length === 0) {
+      return null;
+    }
+
+    // Truncate and add ellipsis if needed
+    if (plainText.length <= maxLength) {
+      return plainText;
+    }
+
+    // Find a good break point (word boundary)
+    let truncated = plainText.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.7) {
+      truncated = truncated.substring(0, lastSpace);
+    }
+
+    return truncated + '...';
+  }
+
+  /**
+   * Convert ENML content to plain text by stripping all XML/HTML tags.
+   *
+   * This implementation uses an HTML parser instead of regular expressions
+   * to avoid incomplete multi-character sanitization issues.
+   */
+  private enmlToPlainText(enmlContent: string): string {
+    // Parse the ENML/HTML content
+    const $ = cheerio.load(enmlContent);
+
+    // Remove en-media tags (attachments) from the DOM
+    $('en-media').remove();
+
+    // Extract text content (HTML/XML tags are not included)
+    let text = $.text();
+
+    // Normalize whitespace similar to the original implementation
+    text = text.replace(/\r\n/g, '\n');
+    text = text.replace(/\n\s*\n/g, '\n');
+    text = text.replace(/[ \t]+/g, ' ');
+    text = text.trim();
+
+    return text;
+  }
+
   async updateNote(note: any, retryCount: number = 0): Promise<any> {
     const maxRetries = 3;
     const baseDelay = 2000; // 2 seconds base delay
@@ -127,6 +186,100 @@ export class EvernoteAPI {
 
   async deleteNote(guid: string): Promise<void> {
     await this.noteStore.deleteNote(guid);
+  }
+
+  async patchNoteContent(guid: string, replacements: NoteReplacement[]): Promise<PatchNoteResult> {
+    // Validate inputs before performing I/O
+    if (!replacements || replacements.length === 0) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes: [],
+        warning: 'No replacements provided',
+      };
+    }
+
+    for (const replacement of replacements) {
+      if (!replacement.find || typeof replacement.find !== 'string' || replacement.find.length === 0) {
+        return {
+          success: false,
+          noteGuid: guid,
+          changes: [],
+          warning: 'Empty find string in replacements',
+        };
+      }
+    }
+
+    // Fetch existing note with content and resources
+    const note = await this.getNote(guid, true, true);
+
+    // Convert ENML to markdown
+    let markdown = this.convertENMLToMarkdown(note.content, note.resources);
+
+    // Track changes
+    const changes: PatchNoteResult['changes'] = [];
+
+    // Apply replacements sequentially
+    for (const replacement of replacements) {
+      const { find, replace, replaceAll = true } = replacement;
+
+      // Count occurrences
+      const regex = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      const matches = markdown.match(regex);
+      const occurrences = matches ? matches.length : 0;
+
+      // Perform replacement
+      let replaced = 0;
+      if (occurrences > 0) {
+        if (replaceAll) {
+          markdown = markdown.split(find).join(replace);
+          replaced = occurrences;
+        } else {
+          markdown = markdown.replace(find, replace);
+          replaced = 1;
+        }
+      }
+
+      changes.push({
+        find,
+        occurrences,
+        replaced,
+      });
+    }
+
+    // Check if any changes were made
+    const totalReplaced = changes.reduce((sum, c) => sum + c.replaced, 0);
+    if (totalReplaced === 0) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes,
+        warning: 'No matches found for any replacement patterns',
+      };
+    }
+
+    // Check if content would be empty after replacement
+    const trimmedMarkdown = markdown.trim();
+    if (!trimmedMarkdown) {
+      return {
+        success: false,
+        noteGuid: guid,
+        changes,
+        warning: 'Replacement would result in empty note content - operation aborted',
+      };
+    }
+
+    // Apply updated markdown back to note, preserving existing resources
+    await this.applyMarkdownToNote(note, markdown, { preserveResources: true });
+
+    // Update the note
+    await this.updateNote(note);
+
+    return {
+      success: true,
+      noteGuid: guid,
+      changes,
+    };
   }
 
   async searchNotes(params: SearchParameters): Promise<any> {
@@ -392,18 +545,48 @@ export class EvernoteAPI {
     return enmlToMarkdown(enmlContent, { resources: normalized });
   }
 
-  async applyMarkdownToNote(note: any, markdown: string): Promise<void> {
+  async applyMarkdownToNote(note: any, markdown: string, options?: { preserveResources?: boolean }): Promise<void> {
     const EvernoteModule = (Evernote as any).default || Evernote;
+    const originalResources = options?.preserveResources ? (note.resources || []) : [];
+
     const conversion = this.convertMarkdownToENML(markdown, note.resources);
     note.content = this.wrapEnml(conversion.enml);
     const attachmentResources = this.buildResourcesFromAttachments(
       conversion.attachments,
       EvernoteModule
     );
-    if (attachmentResources.length > 0) {
-      note.resources = attachmentResources;
-    } else if (note.resources) {
-      delete note.resources;
+
+    if (options?.preserveResources) {
+      // Merge: start with original resources, add any new attachments
+      const existingHashes = new Set(
+        originalResources.map((r: any) =>
+          r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : null
+        ).filter(Boolean)
+      );
+
+      // Add new attachments that aren't already in original resources
+      const mergedResources = [...originalResources];
+      for (const resource of attachmentResources) {
+        const hash = resource.data?.bodyHash
+          ? Buffer.from(resource.data.bodyHash).toString('hex')
+          : null;
+        if (hash && !existingHashes.has(hash)) {
+          mergedResources.push(resource);
+        }
+      }
+
+      if (mergedResources.length > 0) {
+        note.resources = mergedResources;
+      } else {
+        delete note.resources;
+      }
+    } else {
+      // Original behavior: replace resources with new attachments only
+      if (attachmentResources.length > 0) {
+        note.resources = attachmentResources;
+      } else if (note.resources) {
+        delete note.resources;
+      }
     }
   }
 

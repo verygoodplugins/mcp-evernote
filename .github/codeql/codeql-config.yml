@@ -1,0 +1,33 @@
+name: "CodeQL Config"
+
+# Paths to ignore in analysis
+paths-ignore:
+  - 'node_modules'
+  - 'dist'
+  - '**/*.test.ts'
+  - '__tests__'
+
+# Query filters to suppress known false positives
+query-filters:
+  # OAuth1 verifier must come from query string per OAuth spec
+  # The auth-standalone.ts callback endpoint handles OAuth1 flow
+  - exclude:
+      id: js/sensitive-get-query
+      path-glob: '**/auth-standalone.ts'
+
+  # The install script intentionally logs masked credentials for user guidance
+  # Secrets are replaced with *** before logging
+  - exclude:
+      id: js/clear-text-logging
+      path-glob: '**/install-to-claude.js'
+
+  # The auth script logs a config example with masked credentials for user guidance
+  - exclude:
+      id: js/clear-text-logging
+      path-glob: '**/auth-standalone.ts'
+
+  # The Claude command path comes from detectEnvironment() which checks
+  # for the 'claude' binary - this is intentional trusted input
+  - exclude:
+      id: js/shell-command-injection-from-environment
+      path-glob: '**/install-to-claude.js'

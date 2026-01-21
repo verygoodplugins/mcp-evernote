@@ -356,7 +356,7 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_search_notes',
-    description: 'Search for notes in Evernote',
+    description: 'Search for notes in Evernote with optional content preview',
     inputSchema: {
       type: 'object',
       properties: {
@@ -372,6 +372,11 @@ const tools: Tool[] = [
           type: 'number',
           description: 'Maximum number of results (default: 20, max: 100)',
           default: 20,
+        },
+        includePreview: {
+          type: 'boolean',
+          description: 'Include first ~300 chars of note content as plain text preview (requires extra API calls)',
+          default: false,
         },
       },
       required: ['query'],
@@ -714,6 +719,44 @@ const tools: Tool[] = [
       required: ['guid'],
     },
   },
+  // Patch note tool for targeted find-and-replace updates
+  {
+    name: 'evernote_patch_note',
+    description: 'Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'Note GUID',
+        },
+        replacements: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              find: {
+                type: 'string',
+                description: 'Text to find (exact match)',
+              },
+              replace: {
+                type: 'string',
+                description: 'Replacement text',
+              },
+              replaceAll: {
+                type: 'boolean',
+                description: 'Replace all occurrences (default: true)',
+                default: true,
+              },
+            },
+            required: ['find', 'replace'],
+          },
+          description: 'Array of find-and-replace operations to apply',
+        },
+      },
+      required: ['guid', 'replacements'],
+    },
+  },
 ];
 
 // List tools handler
@@ -885,8 +928,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_search_notes': {
-        const { query, notebookName, maxResults = 20 } = args as any;
-        
+        const { query, notebookName, maxResults = 20, includePreview = false } = args as any;
+
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
         if (notebookName) {
@@ -903,11 +946,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           maxNotes: Math.min(maxResults, 100),
         });
 
-        const notes = results.notes.map((note: any) => ({
-          guid: note.guid,
-          title: note.title,
-          created: new Date(note.created).toISOString(),
-          updated: new Date(note.updated).toISOString(),
+        // Build tag lookup map (tagGuid -> tagName) - single API call
+        let tagMap: Map<string, string> | undefined;
+        const hasAnyTags = results.notes.some((note: any) => note.tagGuids && note.tagGuids.length > 0);
+        if (hasAnyTags) {
+          const tags = await evernoteApi.listTags();
+          tagMap = new Map(tags.map(t => [t.guid!, t.name!]));
+        }
+
+        // Build enhanced note results
+        const notes = await Promise.all(results.notes.map(async (note: any) => {
+          const enhanced: any = {
+            guid: note.guid,
+            title: note.title,
+            created: new Date(note.created).toISOString(),
+            updated: new Date(note.updated).toISOString(),
+            contentLength: note.contentLength,
+            notebookGuid: note.notebookGuid,
+          };
+
+          // Resolve tag names from GUIDs
+          if (note.tagGuids && note.tagGuids.length > 0 && tagMap) {
+            enhanced.tags = note.tagGuids
+              .map((guid: string) => tagMap!.get(guid))
+              .filter(Boolean);
+          }
+
+          // Include useful attributes if present
+          if (note.attributes) {
+            if (note.attributes.sourceURL) {
+              enhanced.sourceURL = note.attributes.sourceURL;
+            }
+            if (note.attributes.author) {
+              enhanced.author = note.attributes.author;
+            }
+          }
+
+          // Fetch content preview if requested
+          if (includePreview) {
+            try {
+              const preview = await evernoteApi.getNotePreview(note.guid, 300);
+              if (preview) {
+                enhanced.preview = preview;
+              }
+            } catch (e) {
+              // Skip preview on error, don't fail the whole search
+              console.error(`Failed to get preview for note ${note.guid}: ${(e as Error).message}`);
+            }
+          }
+
+          return enhanced;
         }));
 
         return {
@@ -1346,6 +1434,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'evernote_patch_note': {
+        const { guid, replacements } = args as any;
+
+        if (!replacements || !Array.isArray(replacements) || replacements.length === 0) {
+          throw new Error('At least one replacement must be provided');
+        }
+
+        // Validate each replacement has a non-empty find string
+        for (const r of replacements) {
+          if (!r.find || typeof r.find !== 'string' || r.find.length === 0) {
+            throw new Error('Each replacement must have a non-empty "find" string');
+          }
+        }
+
+        const result = await evernoteApi.patchNoteContent(guid, replacements);
+
+        // Format the response
+        const changesSummary = result.changes
+          .map(c => `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`)
+          .join('\n');
+
+        if (result.success) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
+              },
+            ],
+          };
+        }
       }
 
       case 'evernote_health_check': {
