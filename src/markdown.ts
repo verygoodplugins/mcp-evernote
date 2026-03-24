@@ -239,8 +239,13 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
   try {
     const fileUrl = new URL(candidate);
     if (fileUrl.protocol === 'file:') {
+      const filePath = fileURLToPath(fileUrl);
+      if (!filePath.startsWith('/home/')) {
+        console.warn(`Path rejected (security): ${filePath} is outside /home`);
+        return null;
+      }
       return {
-        path: fileURLToPath(fileUrl),
+        path: filePath,
         sourceURL: fileUrl.toString(),
       };
     }
@@ -263,6 +268,11 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
   const absolute = path.isAbsolute(candidate)
     ? candidate
     : path.resolve(process.cwd(), candidate);
+
+  if (!absolute.startsWith('/home/')) {
+    console.warn(`Path rejected (security): ${absolute} is outside /home`);
+    return null;
+  }
 
   if (!existsSync(absolute) || !statSync(absolute).isFile()) {
     return null;
