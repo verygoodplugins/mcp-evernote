@@ -1043,39 +1043,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'evernote_update_note': {
         const { guid, title, content, tags, forceUpdate = false } = args as any;
         
-        console.error(`=== Update Note Debug ===`);
-        console.error(`GUID: ${guid}`);
-        console.error(`Title: ${title || 'unchanged'}`);
-        console.error(`Content: ${content ? `${content.length} chars` : 'unchanged'}`);
-        console.error(`Tags: ${tags ? JSON.stringify(tags) : 'unchanged'}`);
-        console.error(`========================`);
+        console.error(`Updating note ${guid}`);
         
         try {
           // Get existing note
-          console.error(`Step 1: Getting existing note ${guid}...`);
           const note = await evernoteApi.getNote(guid, true, true);
-          console.error(`Step 1 complete: Retrieved note "${note.title}"`);
-          
+
           // Update fields
           if (title !== undefined) {
-            console.error(`Step 2: Updating title from "${note.title}" to "${title}"`);
             note.title = title;
           }
-          
+
           if (content !== undefined) {
-            console.error(`Step 3: Updating content (${content.length} chars)...`);
             await evernoteApi.applyMarkdownToNote(note, content);
-            console.error(`Step 3 complete: Content updated`);
           }
-          
+
           if (tags !== undefined) {
-            console.error(`Step 4: Updating tags to ${JSON.stringify(tags)}`);
             note.tagNames = tags;
           }
 
-          console.error(`Step 5: Calling updateNote API...`);
           const updatedNote = await evernoteApi.updateNote(note);
-          console.error(`Step 5 complete: Note updated successfully`);
 
           return {
             content: [
@@ -1086,11 +1073,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         } catch (stepError: any) {
-          console.error(`=== Update Note Step Failed ===`);
-          console.error(`Step Error: ${stepError.message}`);
-          console.error(`Error Code: ${stepError.errorCode}`);
-          console.error(`Step Stack: ${stepError.stack}`);
-          console.error(`==============================`);
+          console.error(`Update failed for ${guid}: code=${stepError.errorCode || 'none'}`);
           
           // Handle RTE room conflict with forceUpdate option
           if (stepError.errorCode === 19 && forceUpdate) {
@@ -1665,42 +1648,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
     
-    // Enhanced error logging with debug information
-    const errorInfo = {
-      tool: name,
-      arguments: args,
-      timestamp: new Date().toISOString(),
-      error: {
-        message: error.message,
-        name: error.name,
-        stack: error.stack,
-        // Include Evernote-specific error details if available
-        ...(error.errorCode && { errorCode: error.errorCode }),
-        ...(error.parameter && { parameter: error.parameter }),
-        ...(error.rateLimitDuration && { rateLimitDuration: error.rateLimitDuration }),
-      },
-      environment: {
-        apiInitialized: !!api,
-        apiInitError,
-        environment: ENVIRONMENT,
-        hasTokens: !!(process.env.EVERNOTE_ACCESS_TOKEN || process.env.OAUTH_TOKEN),
-      }
-    };
-    
-    console.error('=== MCP Tool Execution Failed ===');
-    console.error(JSON.stringify(errorInfo, null, 2));
-    console.error('================================');
+    const timestamp = new Date().toISOString();
 
-    // Return detailed error information instead of throwing
+    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}`);
+
+    // Return error information without sensitive data
     return {
       content: [
         {
           type: 'text',
-          text: `❌ Tool execution failed: ${name}\n\n` +
-                `Error: ${error.message}\n\n` +
-                `Arguments: ${JSON.stringify(args, null, 2)}\n\n` +
-                `Timestamp: ${errorInfo.timestamp}\n\n` +
-                `Debug Info:\n${JSON.stringify(errorInfo, null, 2)}`,
+          text: `Tool execution failed: ${name}\n\n` +
+                `Error: ${error.message}\n` +
+                `Timestamp: ${timestamp}` +
+                (error.errorCode ? `\nError code: ${error.errorCode}` : ''),
         },
       ],
       isError: true,
