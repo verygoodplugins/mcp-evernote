@@ -1708,40 +1708,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Handle unhandled rejections to prevent server crash
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('=== Unhandled Rejection ===');
-  console.error('Reason:', reason);
-  console.error('Promise:', promise);
-  console.error('=========================');
-  
-  // If it's an authentication error, reset API state
-  if (reason?.message?.includes('Authentication') || 
-      reason?.message?.includes('token') ||
-      reason?.message?.includes('AUTHENTICATION_EXPIRED')) {
-    console.error('Detected authentication error in unhandled rejection, resetting API state');
-    api = null;
-    apiInitError = null;
-    lastInitAttempt = 0;
-  }
+// Handle unhandled rejections - log and exit
+process.on('unhandledRejection', (reason: any) => {
+  console.error('Fatal: Unhandled rejection - process will exit');
+  console.error('Reason:', reason?.message || reason);
+  // Allow time for logs to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions - log and exit
 process.on('uncaughtException', (error: Error) => {
-  console.error('=== Uncaught Exception ===');
-  console.error('Error:', error);
-  console.error('Stack:', error.stack);
-  console.error('========================');
-  
-  // Don't exit the process - try to recover
-  if (error.message?.includes('Authentication') || 
-      error.message?.includes('token') ||
-      error.message?.includes('AUTHENTICATION_EXPIRED')) {
-    console.error('Detected authentication error in uncaught exception, resetting API state');
-    api = null;
-    apiInitError = null;
-    lastInitAttempt = 0;
-  }
+  console.error('Fatal: Uncaught exception - process will exit');
+  console.error('Error:', error.message);
+  // Allow time for logs to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
 });
 
 // Start server
