@@ -12,6 +12,7 @@ import { EvernoteOAuth } from './oauth.js';
 import { EvernoteAPI } from './evernote-api.js';
 import { EvernoteConfig } from './types.js';
 import { validateToolArgs } from './tool-schemas.js';
+import { computeWebhookSignature } from './webhook.js';
 
 // Load environment variables
 config();
@@ -33,6 +34,7 @@ const POLL_INTERVAL = Math.max(
   parseInt(process.env.EVERNOTE_POLL_INTERVAL || String(DEFAULT_POLL_INTERVAL), 10)
 );
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
+const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
 const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === 'true';
 
 // Polling state
@@ -122,20 +124,32 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
     return;
   }
 
+  if (!WEBHOOK_SECRET) {
+    console.error('Warning: EVERNOTE_WEBHOOK_SECRET not set - webhook payloads are unsigned');
+  }
+
   // Send one webhook per change for cleaner workflow processing
   for (const change of changes) {
     try {
+      const body = JSON.stringify({
+        source: 'mcp-evernote',
+        timestamp: new Date().toISOString(),
+        changes: [change], // Single change per webhook
+      });
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Evernote-Source': 'mcp-evernote-polling',
+      };
+
+      if (WEBHOOK_SECRET) {
+        headers['X-Evernote-Signature'] = computeWebhookSignature(body, WEBHOOK_SECRET);
+      }
+
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Evernote-Source': 'mcp-evernote-polling',
-        },
-        body: JSON.stringify({
-          source: 'mcp-evernote',
-          timestamp: new Date().toISOString(),
-          changes: [change], // Single change per webhook
-        }),
+        headers,
+        body,
       });
 
       if (!response.ok) {
@@ -304,6 +318,7 @@ function getPollingStatus(): any {
     intervalMinutes: POLL_INTERVAL / 60000,
     minIntervalMinutes: MIN_POLL_INTERVAL / 60000,
     webhookUrl: WEBHOOK_URL ? WEBHOOK_URL.substring(0, 50) + '...' : null,
+    webhookSecretConfigured: !!WEBHOOK_SECRET,
     lastPollTime: lastPollTime ? new Date(lastPollTime).toISOString() : null,
     lastUpdateCount,
     errorCount: pollErrorCount,
