@@ -456,8 +456,12 @@ const tools: Tool[] = [
         },
         forceUpdate: {
           type: 'boolean',
-          description: 'Force update by creating a new note if update fails due to locks',
+          description: 'DESTRUCTIVE: If true and update fails due to edit lock, DELETES the original note and creates a replacement. The note GUID will change, note history will be lost, and timestamps will reset. Only use as a last resort after confirming with the user.',
           default: false,
+        },
+        forceUpdateConfirmation: {
+          type: 'string',
+          description: 'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
         },
       },
       required: ['guid'],
@@ -1120,9 +1124,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch (stepError: any) {
           console.error(`Update failed for ${guid}: code=${stepError.errorCode || 'none'}`);
           
-          // Handle RTE room conflict with forceUpdate option
+          // Handle RTE room conflict with forceUpdate option (requires confirmation)
           if (stepError.errorCode === 19 && forceUpdate) {
-            console.error(`Attempting force update by creating new note...`);
+            console.error(`DESTRUCTIVE: Force update triggered for ${guid} - will delete original and create replacement`);
             try {
               // Get the original note again for force update
               const originalNote = await evernoteApi.getNote(guid, true, true);

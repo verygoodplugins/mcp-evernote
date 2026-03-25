@@ -25,7 +25,14 @@ export const UpdateNoteSchema = z.object({
   content: z.string().optional(),
   tags: z.array(z.string()).optional(),
   forceUpdate: z.boolean().optional().default(false),
-});
+  forceUpdateConfirmation: z.string().optional(),
+}).refine(
+  data => !data.forceUpdate || data.forceUpdateConfirmation === 'I understand this will delete the original note',
+  {
+    message: 'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
+    path: ['forceUpdateConfirmation'],
+  },
+);
 
 export const DeleteNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
