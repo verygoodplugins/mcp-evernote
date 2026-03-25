@@ -86,6 +86,28 @@ export function markdownToENML(
     allowedAttributes,
     allowedSchemes: ['http', 'https', 'mailto'],
     selfClosing: ['en-todo', 'en-media', 'br', 'hr'],
+    transformTags: {
+      'a': (tagName: string, attribs: Record<string, string>) => {
+        if (attribs.href) {
+          // Strip null bytes and control characters
+          const cleaned = attribs.href.trim().toLowerCase().replace(/[\x00-\x1f]/g, '');
+          // Blacklist dangerous schemes
+          const dangerousSchemes = ['javascript:', 'data:', 'vbscript:', 'blob:'];
+          if (dangerousSchemes.some(s => cleaned.startsWith(s))) {
+            return { tagName, attribs: { ...attribs, href: '' } };
+          }
+          // For absolute URLs, whitelist allowed schemes only
+          const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(cleaned);
+          if (hasScheme) {
+            const safeSchemes = ['http:', 'https:', 'mailto:'];
+            if (!safeSchemes.some(s => cleaned.startsWith(s))) {
+              return { tagName, attribs: { ...attribs, href: '' } };
+            }
+          }
+        }
+        return { tagName, attribs };
+      },
+    },
   });
 
   return {
