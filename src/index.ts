@@ -17,12 +17,25 @@ import { computeWebhookSignature } from './webhook.js';
 // Load environment variables
 config();
 
-// Validate required environment variables
+// Validate required environment variables with clear instructions
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
 const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || 'production';
 if (!CONSUMER_KEY || !CONSUMER_SECRET) {
-  console.error('Missing required environment variables: EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET');
+  console.error('');
+  console.error('=== IMPORTANT: RELAY THIS MESSAGE TO THE USER IMMEDIATELY ===');
+  console.error('');
+  console.error('EVERNOTE MCP SERVER - CONFIGURATION ERROR');
+  console.error('');
+  console.error('Missing required environment variables:');
+  if (!CONSUMER_KEY) console.error('  - EVERNOTE_CONSUMER_KEY (get from https://dev.evernote.com/)');
+  if (!CONSUMER_SECRET) console.error('  - EVERNOTE_CONSUMER_SECRET (get from https://dev.evernote.com/)');
+  console.error('');
+  console.error('Set these in your MCP server configuration:');
+  console.error('  claude mcp add evernote <command> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret>');
+  console.error('');
+  console.error('=== END OF MESSAGE TO RELAY ===');
+  console.error('');
   process.exit(1);
 }
 

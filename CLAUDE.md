@@ -43,16 +43,15 @@ The authentication system detects the runtime environment and adapts accordingly
    - Claude Code: Expects OAuth through `/mcp` command with tokens in env vars
    - Claude Desktop: Uses standalone auth flow with token persistence to `.evernote-token.json`
 
-2. **Token Resolution Order**:
+2. **Token Resolution Order** (env vars only - no file storage):
    - Environment variables (`EVERNOTE_ACCESS_TOKEN`)
    - Claude Code OAuth tokens (`OAUTH_TOKEN`)
-   - Persisted token file (`.evernote-token.json`)
-   - Falls back to prompting for authentication
+   - If neither found, emits clear instructions to stderr for Claude to relay to user
 
 3. **Standalone Auth** (`src/auth-standalone.ts`):
    - Launches Express server on configurable port
    - Handles OAuth callback and token exchange
-   - Persists tokens for Claude Desktop usage
+   - Displays token for user to set as environment variable (does NOT save to disk)
 
 ### Evernote API Integration
 The `EvernoteAPI` class (`src/evernote-api.ts`) wraps the Evernote SDK:
@@ -100,14 +99,15 @@ Required:
 Optional:
 - `EVERNOTE_ENVIRONMENT`: 'production' (default) or 'sandbox'
 - `OAUTH_CALLBACK_PORT`: OAuth server port (default 3000)
-- `EVERNOTE_ACCESS_TOKEN`: Direct token (bypasses OAuth)
+- `EVERNOTE_ACCESS_TOKEN`: Access token (primary auth method)
+- `EVERNOTE_WEBHOOK_SECRET`: HMAC secret for signing webhook payloads
 
 ## Testing Considerations
 
 ### OAuth Testing
 - Sandbox environment available for testing (`EVERNOTE_ENVIRONMENT=sandbox`)
 - Requires separate sandbox account at sandbox.evernote.com
-- Token file can be manually created for CI/CD environments
+- Set `EVERNOTE_ACCESS_TOKEN` env var for CI/CD environments
 
 ### Tool Testing
 - Each tool can be tested independently via MCP protocol
@@ -129,5 +129,6 @@ Optional:
 
 ### Claude Desktop Integration
 - Requires manual OAuth via `npm run auth`
-- Token persisted to `.evernote-token.json`
-- Config added to `claude_desktop_config.json`
+- Token displayed in terminal for user to set as environment variable
+- No tokens saved to disk - all auth via environment variables
+- Config added to `claude_desktop_config.json` with env vars
