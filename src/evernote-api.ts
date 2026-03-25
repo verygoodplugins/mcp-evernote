@@ -19,8 +19,23 @@ import {
   PatchNoteResult,
 } from './types.js';
 import { readFile } from 'fs/promises';
-import { basename, extname } from 'path';
+import { basename, extname, resolve as pathResolve } from 'path';
 import * as cheerio from 'cheerio';
+
+/**
+ * Validate that a file path resolves within the /home directory tree.
+ * Throws a descriptive error if the path is outside /home.
+ * Returns the resolved absolute path.
+ */
+export function validateFilePath(filePath: string): string {
+  const resolved = pathResolve(filePath);
+  if (!resolved.startsWith('/home/')) {
+    throw new Error(
+      `File path rejected: ${resolved} is outside the /home directory tree`,
+    );
+  }
+  return resolved;
+}
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -140,25 +155,15 @@ export class EvernoteAPI {
   async updateNote(note: any, retryCount: number = 0): Promise<any> {
     const maxRetries = 3;
     const baseDelay = 2000; // 2 seconds base delay
-    
+
     try {
-      console.error(`Attempting to update note ${note.guid} with title: ${note.title} (attempt ${retryCount + 1})`);
-      console.error(`Note content length: ${note.content ? note.content.length : 'no content'}`);
-      console.error(`Note tags: ${note.tagNames ? JSON.stringify(note.tagNames) : 'no tags'}`);
-      
+      console.error(`Updating note ${note.guid} (attempt ${retryCount + 1})`);
+
       const result = await this.noteStore.updateNote(note);
       console.error(`Note update successful for ${note.guid}`);
       return result;
     } catch (error: any) {
-      console.error('=== Note Update Failed ===');
-      console.error(`Note GUID: ${note.guid}`);
-      console.error(`Note Title: ${note.title}`);
-      console.error(`Error Name: ${error.name}`);
-      console.error(`Error Message: ${error.message}`);
-      console.error(`Error Code: ${error.errorCode || 'none'}`);
-      console.error(`Error Parameter: ${error.parameter || 'none'}`);
-      console.error(`Attempt: ${retryCount + 1}/${maxRetries + 1}`);
-      console.error('========================');
+      console.error(`Note update failed for ${note.guid}: code=${error.errorCode || 'none'} attempt=${retryCount + 1}/${maxRetries + 1}`);
       
       // Handle specific Evernote error codes
       if (error.errorCode === 19 && retryCount < maxRetries) {
@@ -170,12 +175,11 @@ export class EvernoteAPI {
         return this.updateNote(note, retryCount + 1);
       }
       
-      // Enhanced error with context
+      // Enhanced error with context (no sensitive data like titles)
       const enhancedError = new Error(`Failed to update note ${note.guid}: ${error.message}`);
       enhancedError.name = error.name || 'EvernoteUpdateError';
       (enhancedError as any).originalError = error;
       (enhancedError as any).noteGuid = note.guid;
-      (enhancedError as any).noteTitle = note.title;
       (enhancedError as any).errorCode = error.errorCode;
       (enhancedError as any).parameter = error.parameter;
       (enhancedError as any).retriesAttempted = retryCount;
@@ -413,8 +417,11 @@ export class EvernoteAPI {
   async addResourceToNote(noteGuid: string, filePath: string, filename?: string): Promise<any> {
     const EvernoteModule = (Evernote as any).default || Evernote;
 
+    // Validate path is within /home before reading
+    const resolvedPath = validateFilePath(filePath);
+
     // Read file
-    const fileData = await readFile(filePath);
+    const fileData = await readFile(resolvedPath);
     const hash = this.computeHash(fileData);
     const hashHex = hash.toString('hex');
 
