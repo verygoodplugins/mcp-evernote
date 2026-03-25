@@ -7,9 +7,11 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { config } from 'dotenv';
+import { ZodError } from 'zod';
 import { EvernoteOAuth } from './oauth.js';
 import { EvernoteAPI } from './evernote-api.js';
 import { EvernoteConfig } from './types.js';
+import { validateToolArgs } from './tool-schemas.js';
 
 // Load environment variables
 config();
@@ -770,6 +772,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  // Validate tool arguments against Zod schemas
+  let validatedArgs: any;
+  try {
+    validatedArgs = validateToolArgs(name, args);
+  } catch (error: any) {
+    if (error instanceof ZodError) {
+      const issues = error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
+      return {
+        content: [{ type: 'text', text: `Validation error: ${issues}` }],
+        isError: true,
+      };
+    }
+    throw error;
+  }
+
   try {
     // Handle auth revocation specially
     if (name === 'evernote_revoke_auth') {
@@ -896,7 +913,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     switch (name) {
       case 'evernote_create_note': {
-        const { title, content, notebookName, tags } = args as any;
+        const { title, content, notebookName, tags } = validatedArgs;
         
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
@@ -928,7 +945,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_search_notes': {
-        const { query, notebookName, maxResults = 20, includePreview = false } = args as any;
+        const { query, notebookName, maxResults = 20, includePreview = false } = validatedArgs;
 
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
@@ -1012,7 +1029,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_note': {
-        const { guid, includeContent = true } = args as any;
+        const { guid, includeContent = true } = validatedArgs;
         const note = await evernoteApi.getNote(guid, includeContent, includeContent);
         
         const result: any = {
@@ -1041,7 +1058,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_note': {
-        const { guid, title, content, tags, forceUpdate = false } = args as any;
+        const { guid, title, content, tags, forceUpdate = false } = validatedArgs;
         
         console.error(`Updating note ${guid}`);
         
@@ -1116,7 +1133,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_delete_note': {
-        const { guid } = args as any;
+        const { guid } = validatedArgs;
         await evernoteApi.deleteNote(guid);
         
         return {
@@ -1143,7 +1160,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_create_notebook': {
-        const { name, stack } = args as any;
+        const { name, stack } = validatedArgs;
         const notebook = await evernoteApi.createNotebook(name, stack);
         
         return {
@@ -1170,7 +1187,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_create_tag': {
-        const { name, parentTagName } = args as any;
+        const { name, parentTagName } = validatedArgs;
         
         // Find parent tag GUID if name provided
         let parentGuid: string | undefined;
@@ -1220,7 +1237,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Resource tools
       case 'evernote_get_resource': {
-        const { guid, includeData = true } = args as any;
+        const { guid, includeData = true } = validatedArgs;
         const resource = await evernoteApi.getResource(guid, includeData);
 
         const result: any = {
@@ -1248,7 +1265,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_list_note_resources': {
-        const { noteGuid } = args as any;
+        const { noteGuid } = validatedArgs;
         const resources = await evernoteApi.listNoteResources(noteGuid);
 
         return {
@@ -1262,7 +1279,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_add_resource_to_note': {
-        const { noteGuid, filePath, filename } = args as any;
+        const { noteGuid, filePath, filename } = validatedArgs;
         const updatedNote = await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
 
         return {
@@ -1276,7 +1293,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_resource_recognition': {
-        const { resourceGuid } = args as any;
+        const { resourceGuid } = validatedArgs;
         const recognition = await evernoteApi.getResourceRecognition(resourceGuid);
 
         // Extract just the text for a summary
@@ -1304,7 +1321,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Notebook get/update tools
       case 'evernote_get_notebook': {
-        const { name, guid } = args as any;
+        const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
           throw new Error('Either name or guid must be provided');
@@ -1334,7 +1351,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_notebook': {
-        const { guid, name, stack } = args as any;
+        const { guid, name, stack } = validatedArgs;
         const notebook = await evernoteApi.getNotebook(guid);
 
         if (name !== undefined) {
@@ -1358,7 +1375,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Tag get/update tools
       case 'evernote_get_tag': {
-        const { name, guid } = args as any;
+        const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
           throw new Error('Either name or guid must be provided');
@@ -1388,7 +1405,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_tag': {
-        const { guid, name, parentTagName } = args as any;
+        const { guid, name, parentTagName } = validatedArgs;
         const tag = await evernoteApi.getTag(guid);
 
         if (name !== undefined) {
@@ -1420,7 +1437,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_patch_note': {
-        const { guid, replacements } = args as any;
+        const { guid, replacements } = validatedArgs;
 
         if (!replacements || !Array.isArray(replacements) || replacements.length === 0) {
           throw new Error('At least one replacement must be provided');
@@ -1462,7 +1479,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_health_check': {
-        const { verbose = false } = args as any;
+        const { verbose = false } = validatedArgs;
 
         // Basic server info
         const healthStatus: any = {
