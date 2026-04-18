@@ -1,3 +1,6 @@
+// Copyright (c) 2026 raffishquartan. All rights reserved.
+// Licensed for personal use only.
+
 /**
  * Tests for process error handlers (M5).
  *

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 raffishquartan. All rights reserved.
+// Licensed for personal use only.
+
 import { z } from 'zod';
 
 export const CreateNoteSchema = z.object({
