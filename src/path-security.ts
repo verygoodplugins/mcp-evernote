@@ -34,7 +34,10 @@ function isWithinRoot(realCandidate: string, realRoot: string): boolean {
   const candidate = comparablePath(realCandidate);
   const root = comparablePath(realRoot);
   const relative = path.relative(root, candidate);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  return (
+    relative === '' ||
+    (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+  );
 }
 
 function comparablePath(filePath: string): string {
@@ -54,8 +57,13 @@ export function validateLocalFilePathSync(filePath: string): string | null {
     return null;
   }
 
-  const realCandidate = realpathSync.native(absolute);
-  if (!statSync(realCandidate).isFile()) {
+  let realCandidate: string;
+  try {
+    realCandidate = realpathSync.native(absolute);
+    if (!statSync(realCandidate).isFile()) {
+      return null;
+    }
+  } catch {
     return null;
   }
 

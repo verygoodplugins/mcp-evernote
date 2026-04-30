@@ -82,7 +82,7 @@
     "sanitize-html": {
       "postcss": "^8.5.13"
     },
-    "undici": "^7.24.0",
+    "undici": "^6.21.0",
     "express": {
       "path-to-regexp": "0.1.13"
     },

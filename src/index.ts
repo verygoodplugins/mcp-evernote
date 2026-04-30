@@ -810,7 +810,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     validatedArgs = validateToolArgs(name, args);
   } catch (error: any) {
     if (error instanceof ZodError) {
-      const issues = error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
+      const issues = error.issues
+        .map(i => {
+          const issuePath = i.path.length > 0 ? i.path.join('.') : '(root)';
+          return `${issuePath}: ${i.message}`;
+        })
+        .join('; ');
       return {
         content: [{ type: 'text', text: `Validation error: ${issues}` }],
         isError: true,
