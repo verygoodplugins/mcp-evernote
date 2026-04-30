@@ -1,4 +1,7 @@
 import { describe, beforeEach, it, expect } from '@jest/globals';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 // Simple OAuth tests focusing on basic functionality
 describe('OAuth Basic Tests', () => {
@@ -83,23 +86,103 @@ describe('OAuth Basic Tests', () => {
     expect(tokens.noteStoreUrl).toBe('https://test.evernote.com/notestore');
   });
 
-  it('should not have file-based token loading', () => {
-    const { EvernoteOAuth } = require('../../src/oauth');
-    const config = {
-      consumerKey: 'test-key',
-      consumerSecret: 'test-secret',
-      sandbox: true,
-      china: false,
-    };
+  it('should read compatible token files as a fallback', async () => {
+    const originalCwd = process.cwd();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-evernote-oauth-'));
+    process.chdir(tempDir);
 
-    const oauth = new EvernoteOAuth(config);
-    // loadToken method should no longer exist
-    expect((oauth as any).loadToken).toBeUndefined();
-    // tokenFile property should no longer exist
-    expect((oauth as any).tokenFile).toBeUndefined();
+    try {
+      await fs.writeFile(
+        path.join(tempDir, '.evernote-token.json'),
+        JSON.stringify({
+          accessToken: 'legacy-file-token',
+          noteStoreUrl: 'https://test.evernote.com/notestore',
+          userId: 123,
+        }),
+      );
+
+      const { EvernoteOAuth } = require('../../src/oauth');
+      const config = {
+        consumerKey: 'test-key',
+        consumerSecret: 'test-secret',
+        sandbox: true,
+        china: false,
+      };
+
+      const oauth = new EvernoteOAuth(config);
+      const tokens = await oauth.getAccessToken();
+
+      expect(tokens.token).toBe('legacy-file-token');
+      expect(tokens.noteStoreUrl).toBe('https://test.evernote.com/notestore');
+      expect(tokens.userId).toBe(123);
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
-  it('revokeToken should not attempt file deletion', async () => {
+  it('should prefer env tokens over token files', async () => {
+    const originalCwd = process.cwd();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-evernote-oauth-'));
+    process.chdir(tempDir);
+    process.env.EVERNOTE_ACCESS_TOKEN = 'env-token';
+    process.env.EVERNOTE_NOTESTORE_URL = 'https://env.evernote.com/notestore';
+
+    try {
+      await fs.writeFile(
+        path.join(tempDir, '.evernote-token.json'),
+        JSON.stringify({
+          token: 'file-token',
+          noteStoreUrl: 'https://file.evernote.com/notestore',
+        }),
+      );
+
+      const { EvernoteOAuth } = require('../../src/oauth');
+      const config = {
+        consumerKey: 'test-key',
+        consumerSecret: 'test-secret',
+        sandbox: true,
+        china: false,
+      };
+
+      const oauth = new EvernoteOAuth(config);
+      const tokens = await oauth.getAccessToken();
+
+      expect(tokens.token).toBe('env-token');
+      expect(tokens.noteStoreUrl).toBe('https://env.evernote.com/notestore');
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('revokeToken should remove compatible token files when present', async () => {
+    const originalCwd = process.cwd();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-evernote-oauth-'));
+    process.chdir(tempDir);
+    const tokenPath = path.join(tempDir, '.evernote-token.json');
+
+    try {
+      await fs.writeFile(tokenPath, JSON.stringify({ token: 'file-token' }));
+
+      const { EvernoteOAuth } = require('../../src/oauth');
+      const config = {
+        consumerKey: 'test-key',
+        consumerSecret: 'test-secret',
+        sandbox: true,
+        china: false,
+      };
+
+      const oauth = new EvernoteOAuth(config);
+      await expect(oauth.revokeToken()).resolves.not.toThrow();
+      await expect(fs.access(tokenPath)).rejects.toThrow();
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should keep token-file internals private to callers', () => {
     const { EvernoteOAuth } = require('../../src/oauth');
     const config = {
       consumerKey: 'test-key',
@@ -109,7 +192,7 @@ describe('OAuth Basic Tests', () => {
     };
 
     const oauth = new EvernoteOAuth(config);
-    // Should not throw - just logs instructions
-    await expect(oauth.revokeToken()).resolves.not.toThrow();
+    expect(typeof (oauth as any).tokenFile).toBe('string');
+    expect(typeof (oauth as any).loadToken).toBe('function');
   });
 });

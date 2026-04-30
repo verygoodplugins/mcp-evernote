@@ -19,23 +19,9 @@ import {
   PatchNoteResult,
 } from './types.js';
 import { readFile } from 'fs/promises';
-import { basename, extname, resolve as pathResolve } from 'path';
+import { basename, extname } from 'path';
 import * as cheerio from 'cheerio';
-
-/**
- * Validate that a file path resolves within the /home directory tree.
- * Throws a descriptive error if the path is outside /home.
- * Returns the resolved absolute path.
- */
-export function validateFilePath(filePath: string): string {
-  const resolved = pathResolve(filePath);
-  if (!resolved.startsWith('/home/')) {
-    throw new Error(
-      `File path rejected: ${resolved} is outside the /home directory tree`,
-    );
-  }
-  return resolved;
-}
+import { validateLocalFilePath } from './path-security.js';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -417,8 +403,7 @@ export class EvernoteAPI {
   async addResourceToNote(noteGuid: string, filePath: string, filename?: string): Promise<any> {
     const EvernoteModule = (Evernote as any).default || Evernote;
 
-    // Validate path is within /home before reading
-    const resolvedPath = validateFilePath(filePath);
+    const resolvedPath = await validateLocalFilePath(filePath);
 
     // Read file
     const fileData = await readFile(resolvedPath);

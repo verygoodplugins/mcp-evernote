@@ -1,6 +1,3 @@
-// Copyright (c) 2026 raffishquartan. All rights reserved.
-// Licensed for personal use only.
-
 /**
  * Tests for webhook HMAC signing (H5).
  */

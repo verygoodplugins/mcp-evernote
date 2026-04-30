@@ -1,6 +1,3 @@
-// Copyright (c) 2026 raffishquartan. All rights reserved.
-// Licensed for personal use only.
-
 /**
  * Tests for URL scheme defence in depth (M3).
  */
@@ -74,8 +71,10 @@ describe('URL scheme security (M3)', () => {
     });
 
     it('transformTags strips control characters from hrefs', () => {
-      // Verify null byte / control char stripping exists
-      expect(markdownSource).toContain('\\x00');
+      expect(markdownSource).toContain('stripControlCharacters');
+      const result = markdownToENML('<a href="java\u0000script:alert(1)">link</a>');
+      expect(result.enml).not.toContain('java');
+      expect(result.enml).not.toContain('script:');
     });
   });
 });

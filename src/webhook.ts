@@ -1,7 +1,4 @@
-// Copyright (c) 2026 raffishquartan. All rights reserved.
-// Licensed for personal use only.
-
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 /**
  * Compute HMAC-SHA256 signature for a webhook payload.
@@ -21,5 +18,10 @@ export function verifyWebhookSignature(
   secret: string,
 ): boolean {
   const expected = computeWebhookSignature(body, secret);
-  return signature === expected;
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  return (
+    expectedBuffer.length === signatureBuffer.length &&
+    timingSafeEqual(expectedBuffer, signatureBuffer)
+  );
 }

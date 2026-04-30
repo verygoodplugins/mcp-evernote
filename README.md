@@ -217,10 +217,9 @@ npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth
 
 The auth script will:
 1. Prompt for your API credentials (if not in environment)
-2. Optionally save credentials for future use
-3. Open your browser for OAuth authentication
-4. Save the token to `.evernote-token.json`
-5. Display the configuration to add to Claude Desktop
+2. Open your browser for OAuth authentication
+3. Save a compatible token file to `.evernote-token.json`
+4. Display the access token so you can use `EVERNOTE_ACCESS_TOKEN` instead
 
 Or if installed globally:
 ```bash
@@ -241,6 +240,7 @@ mcp-evernote-auth
       "env": {
         "EVERNOTE_CONSUMER_KEY": "your-consumer-key",
         "EVERNOTE_CONSUMER_SECRET": "your-consumer-secret",
+        "EVERNOTE_ACCESS_TOKEN": "your-access-token",
         "EVERNOTE_ENVIRONMENT": "production"
       }
     }
@@ -271,12 +271,13 @@ mcp-evernote-auth
 Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code.
 
 ### 2. Claude Desktop (Manual)
-Run `npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. Token saved to `.evernote-token.json`.
+Run `npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. The script saves `.evernote-token.json` for compatibility and also prints a token you can set as `EVERNOTE_ACCESS_TOKEN`.
 
 ### 3. Environment Variables (CI/CD)
 ```env
 EVERNOTE_ACCESS_TOKEN=your-token
 EVERNOTE_NOTESTORE_URL=your-notestore-url
+EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 ```
 
 ### 4. Direct Token (Advanced)
@@ -617,9 +618,10 @@ npm run format
 
 ## Security
 
-- OAuth tokens are stored locally in `.evernote-token.json`
+- Token lookup prefers `EVERNOTE_ACCESS_TOKEN`, then Claude Code OAuth env, then `.evernote-token.json`
 - Never commit token files to version control
 - Use environment variables for sensitive configuration
+- Local file attachments are restricted to `EVERNOTE_ALLOWED_FILE_ROOTS`; by default this is your home directory and the current working directory
 - Tokens expire after one year by default
 
 ## Contributing

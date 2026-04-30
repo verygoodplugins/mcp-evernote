@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import os from 'os';
 import path from 'path';
@@ -8,6 +8,7 @@ import sanitizeHtml from 'sanitize-html';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { lookup as lookupMimeType } from 'mime-types';
+import { validateLocalFilePathSync } from './path-security.js';
 
 export interface MarkdownExistingResource {
   hashHex: string;
@@ -89,8 +90,7 @@ export function markdownToENML(
     transformTags: {
       'a': (tagName: string, attribs: Record<string, string>) => {
         if (attribs.href) {
-          // Strip null bytes and control characters
-          const cleaned = attribs.href.trim().toLowerCase().replace(/[\x00-\x1f]/g, '');
+          const cleaned = stripControlCharacters(attribs.href).trim().toLowerCase();
           // Blacklist dangerous schemes
           const dangerousSchemes = ['javascript:', 'data:', 'vbscript:', 'blob:'];
           if (dangerousSchemes.some(s => cleaned.startsWith(s))) {
@@ -262,12 +262,13 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
     const fileUrl = new URL(candidate);
     if (fileUrl.protocol === 'file:') {
       const filePath = fileURLToPath(fileUrl);
-      if (!filePath.startsWith('/home/')) {
-        console.warn(`Path rejected (security): ${filePath} is outside /home`);
+      const validatedPath = validateLocalFilePathSync(filePath);
+      if (!validatedPath) {
+        console.warn(`Path rejected (security): ${filePath} is outside allowed file roots`);
         return null;
       }
       return {
-        path: filePath,
+        path: validatedPath,
         sourceURL: fileUrl.toString(),
       };
     }
@@ -291,19 +292,25 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
     ? candidate
     : path.resolve(process.cwd(), candidate);
 
-  if (!absolute.startsWith('/home/')) {
-    console.warn(`Path rejected (security): ${absolute} is outside /home`);
-    return null;
-  }
-
-  if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+  const validatedPath = validateLocalFilePathSync(absolute);
+  if (!validatedPath) {
     return null;
   }
 
   return {
-    path: absolute,
-    sourceURL: pathToFileURL(absolute).toString(),
+    path: validatedPath,
+    sourceURL: pathToFileURL(validatedPath).toString(),
   };
+}
+
+function stripControlCharacters(value: string): string {
+  let cleaned = '';
+  for (const char of value) {
+    if (char.charCodeAt(0) >= 32) {
+      cleaned += char;
+    }
+  }
+  return cleaned;
 }
 
 function buildExistingResourceMap(resources: MarkdownExistingResource[] | undefined) {

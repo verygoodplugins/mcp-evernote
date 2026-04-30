@@ -1,69 +1,77 @@
-// Copyright (c) 2026 raffishquartan. All rights reserved.
-// Licensed for personal use only.
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs';
+import os from 'os';
+import path from 'path';
+import { pathToFileURL } from 'url';
+import { markdownToENML } from '../../src/markdown';
 
-/**
- * Tests for markdown image path security (C2).
- *
- * Verifies that resolveLocalPath rejects paths outside /home,
- * tested through source inspection since resolveLocalPath is private
- * and the full markdownToENML pipeline requires files to exist on disk.
- */
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+describe('markdown local attachment path security (C2)', () => {
+  let tempDir: string;
+  let safeRoot: string;
+  let outsideRoot: string;
+  let safeFile: string;
+  let outsideFile: string;
+  const originalAllowedRoots = process.env.EVERNOTE_ALLOWED_FILE_ROOTS;
 
-const markdownSource = readFileSync(
-  resolve(__dirname, '../../src/markdown.ts'),
-  'utf-8',
-);
-
-describe('markdown path security (C2)', () => {
-  // Extract the resolveLocalPath function source
-  const fnBlock = markdownSource.match(
-    /function resolveLocalPath[\s\S]*?^}/m,
-  );
-
-  it('resolveLocalPath function exists', () => {
-    expect(fnBlock).not.toBeNull();
+  beforeEach(() => {
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'mcp-evernote-md-paths-'));
+    safeRoot = path.join(tempDir, 'safe');
+    outsideRoot = path.join(tempDir, 'outside');
+    mkdirSync(safeRoot);
+    mkdirSync(outsideRoot);
+    safeFile = path.join(safeRoot, 'image.png');
+    outsideFile = path.join(outsideRoot, 'secret.png');
+    writeFileSync(safeFile, Buffer.from('safe-image'));
+    writeFileSync(outsideFile, Buffer.from('outside-image'));
+    process.env.EVERNOTE_ALLOWED_FILE_ROOTS = safeRoot;
   });
 
-  it('checks /home/ prefix after file:// URL resolution', () => {
-    expect(fnBlock).not.toBeNull();
-    const src = fnBlock![0];
-
-    // After fileURLToPath, there should be a /home/ check before returning
-    const fileUrlSection = src.match(
-      /fileURLToPath\(fileUrl\)[\s\S]*?return \{/,
-    );
-    expect(fileUrlSection).not.toBeNull();
-    expect(fileUrlSection![0]).toContain('/home/');
+  afterEach(() => {
+    if (originalAllowedRoots === undefined) {
+      delete process.env.EVERNOTE_ALLOWED_FILE_ROOTS;
+    } else {
+      process.env.EVERNOTE_ALLOWED_FILE_ROOTS = originalAllowedRoots;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('checks /home/ prefix after absolute path resolution', () => {
-    expect(fnBlock).not.toBeNull();
-    const src = fnBlock![0];
+  it('embeds local files inside configured roots', () => {
+    const result = markdownToENML(`![safe](${safeFile})`);
 
-    // After computing the absolute path, there should be a /home/ check
-    // before the existsSync check
-    const absoluteSection = src.match(
-      /const absolute[\s\S]*?existsSync/,
-    );
-    expect(absoluteSection).not.toBeNull();
-    expect(absoluteSection![0]).toContain('/home/');
+    expect(result.enml).toContain('<en-media');
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0].sourcePath).toBe(realpathSync(safeFile));
   });
 
-  it('returns null (not throws) for rejected paths', () => {
-    expect(fnBlock).not.toBeNull();
-    const src = fnBlock![0];
+  it('embeds file URLs inside configured roots', () => {
+    const result = markdownToENML(`![safe](${pathToFileURL(safeFile).toString()})`);
 
-    // The /home/ checks should return null, not throw
-    const homeChecks = src.match(/!.*startsWith.*\/home\//g);
-    expect(homeChecks).not.toBeNull();
-    expect(homeChecks!.length).toBeGreaterThanOrEqual(2);
+    expect(result.enml).toContain('<en-media');
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0].sourcePath).toBe(realpathSync(safeFile));
   });
 
-  it('logs a warning when rejecting paths', () => {
-    expect(fnBlock).not.toBeNull();
-    const src = fnBlock![0];
-    expect(src).toContain('console.warn');
+  it('rejects local files outside configured roots without throwing', () => {
+    const result = markdownToENML(`![secret](${outsideFile})`);
+
+    expect(result.enml).not.toContain('<en-media');
+    expect(result.enml).toContain('<a href=');
+    expect(result.attachments).toHaveLength(0);
+  });
+
+  it('rejects symlinks that resolve outside configured roots', () => {
+    const linkPath = path.join(safeRoot, 'linked-secret.png');
+    symlinkSync(outsideFile, linkPath);
+
+    const result = markdownToENML(`![secret](${linkPath})`);
+
+    expect(result.enml).not.toContain('<en-media');
+    expect(result.attachments).toHaveLength(0);
   });
 });

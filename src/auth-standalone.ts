@@ -16,7 +16,6 @@ import { stdin, stdout } from 'process';
 // Load environment variables
 config();
 
-// Token file kept only for backwards compat during auth flow display
 const tokenFile = path.join(process.cwd(), '.evernote-token.json');
 
 interface Credentials {
@@ -37,8 +36,8 @@ async function getCredentials(): Promise<Credentials> {
     };
   }
 
-  // Credentials are no longer saved to disk for security (H3).
-  // They must come from environment variables or be entered each time.
+  // Credentials are not saved to disk. They must come from environment
+  // variables or be entered each time.
 
   // Prompt for credentials
   console.log('\n🔐 Evernote API Credentials Required');
@@ -219,9 +218,8 @@ async function performOAuth(credentials: Credentials) {
                       <p>Environment: <strong>${credentials.environment}</strong></p>
                     </div>
                     <div class="warning">
-                      <p><strong>Copy your token from the terminal output.</strong></p>
-                      <p>Set it as the <code>EVERNOTE_ACCESS_TOKEN</code> environment variable in your MCP configuration.</p>
-                      <p>The token is NOT saved to disk.</p>
+                      <p><strong>Copy your token from the terminal output if you prefer environment variables.</strong></p>
+                      <p>The token was also saved to <code>.evernote-token.json</code> for compatibility.</p>
                     </div>
                     <p>You can close this window and return to your terminal.</p>
                   </body>
@@ -231,6 +229,8 @@ async function performOAuth(credentials: Credentials) {
               console.log('\n✅ Authentication complete!');
               console.log('  - User:', user.username);
               console.log('  - User ID:', tokenData.userId);
+              await fs.writeFile(tokenFile, JSON.stringify(tokenData, null, 2));
+              console.log('  - Token saved to:', tokenFile);
               if (tokenData.expires) {
                 console.log('  - Expires:', new Date(tokenData.expires).toLocaleString());
               }
@@ -245,7 +245,7 @@ async function performOAuth(credentials: Credentials) {
                 console.log('  EVERNOTE_NOTESTORE_URL=' + noteStoreUrl);
               }
               console.log('');
-              console.log('The token is NOT saved to disk.');
+              console.log('A compatible .evernote-token.json was also saved.');
               
               server.close();
               resolve(tokenData);
@@ -309,7 +309,7 @@ async function main() {
     await performOAuth(credentials);
     
     console.log('\n✅ Setup complete!');
-    console.log('\nSet the following environment variables in your MCP configuration:');
+    console.log('\nRecommended: set the following environment variables in your MCP configuration:');
     console.log('');
     console.log('  EVERNOTE_CONSUMER_KEY=<your-key>');
     console.log('  EVERNOTE_CONSUMER_SECRET=<your-secret>');
@@ -324,6 +324,9 @@ async function main() {
     console.log('');
     console.log('For Claude Desktop, add to claude_desktop_config.json:');
     console.log('  "env": { "EVERNOTE_CONSUMER_KEY": "...", "EVERNOTE_CONSUMER_SECRET": "...", "EVERNOTE_ACCESS_TOKEN": "..." }');
+    console.log('');
+    console.log('Compatibility fallback: .evernote-token.json was saved in this directory.');
+    console.log('Restart your MCP client after updating configuration.');
     
   } catch (error: any) {
     console.error('\n❌ Authentication failed:', error.message);

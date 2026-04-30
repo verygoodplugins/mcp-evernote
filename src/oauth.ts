@@ -1,12 +1,16 @@
 import * as Evernote from 'evernote';
+import fs from 'fs/promises';
+import path from 'path';
 import { EvernoteConfig, OAuthTokens } from './types.js';
 
 export class EvernoteOAuth {
   private config: EvernoteConfig;
+  private tokenFile: string;
   private isClaudeCode: boolean;
 
   constructor(config: EvernoteConfig) {
     this.config = config;
+    this.tokenFile = path.join(process.cwd(), '.evernote-token.json');
 
     // Detect if running in Claude Code
     this.isClaudeCode = !!(process.env.MCP_TRANSPORT || process.env.CLAUDE_CODE_MCP);
@@ -47,9 +51,15 @@ export class EvernoteOAuth {
       return tokens;
     }
 
+    const fileTokens = await this.loadToken();
+    if (fileTokens) {
+      console.error('Using Evernote access token from .evernote-token.json');
+      return fileTokens;
+    }
+
     // No token found - emit clear instructions that Claude must relay to the user
     this.emitMissingTokenInstructions();
-    throw new Error('Authentication required. Set EVERNOTE_ACCESS_TOKEN environment variable.');
+    throw new Error('Authentication required. Set EVERNOTE_ACCESS_TOKEN or run npm run auth.');
   }
 
   /**
@@ -62,10 +72,10 @@ export class EvernoteOAuth {
     console.error('');
     console.error('EVERNOTE MCP SERVER - AUTHENTICATION REQUIRED');
     console.error('');
-    console.error('No Evernote access token found. This server requires');
-    console.error('authentication via environment variables.');
+    console.error('No Evernote access token found. Prefer environment variables');
+    console.error('for authentication, or run the standalone auth flow.');
     console.error('');
-    console.error('Required environment variable:');
+    console.error('Recommended environment variable:');
     console.error('  EVERNOTE_ACCESS_TOKEN - Your Evernote OAuth access token');
     console.error('');
     console.error('Optional environment variables:');
@@ -83,8 +93,8 @@ export class EvernoteOAuth {
     } else {
       console.error('To authenticate:');
       console.error('  1. Run: npm run auth');
-      console.error('     This will complete the OAuth flow and display your token.');
-      console.error('  2. Set the token as an environment variable in your MCP config.');
+      console.error('     This will complete OAuth, save .evernote-token.json, and display your token.');
+      console.error('  2. Prefer setting the token as an environment variable in your MCP config.');
       console.error('');
       console.error('  For Claude Desktop, add to claude_desktop_config.json:');
       console.error('    "env": { "EVERNOTE_ACCESS_TOKEN": "<your-token>" }');
@@ -118,11 +128,38 @@ export class EvernoteOAuth {
     return true;
   }
 
+  private async loadToken(): Promise<OAuthTokens | null> {
+    try {
+      const data = await fs.readFile(this.tokenFile, 'utf-8');
+      const raw = JSON.parse(data) as Partial<OAuthTokens> & { accessToken?: string };
+      const tokens: OAuthTokens = {
+        ...raw,
+        token: raw.token || raw.accessToken || '',
+      };
+
+      if (!this.validateToken(tokens)) {
+        return null;
+      }
+
+      return tokens;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        console.error(`Failed to load token file: ${error.message}`);
+      }
+      return null;
+    }
+  }
+
   async revokeToken(): Promise<void> {
-    // Tokens are now stored in environment variables only.
-    // Revoking means the user must remove/update the env var.
-    console.error('Token revocation requested. Remove or update the');
-    console.error('EVERNOTE_ACCESS_TOKEN environment variable in your MCP configuration.');
+    try {
+      await fs.unlink(this.tokenFile);
+      console.error('Removed .evernote-token.json');
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        console.error(`Failed to remove token file: ${error.message}`);
+      }
+    }
+    console.error('If you use EVERNOTE_ACCESS_TOKEN, remove or update it in your MCP configuration.');
   }
 
   async getAuthenticatedClient(): Promise<any> {
@@ -140,6 +177,9 @@ export class EvernoteOAuth {
         const userStore = authenticatedClient.getUserStore();
         const noteStoreUrl = await userStore.getNoteStoreUrl();
         tokens.noteStoreUrl = noteStoreUrl;
+        if (!process.env.EVERNOTE_ACCESS_TOKEN && !(this.isClaudeCode && process.env.OAUTH_TOKEN)) {
+          await fs.writeFile(this.tokenFile, JSON.stringify(tokens, null, 2));
+        }
       } catch (error) {
         console.error('Failed to get noteStoreUrl from Evernote');
         throw new Error('Failed to get noteStoreUrl from Evernote. Token may be invalid.');

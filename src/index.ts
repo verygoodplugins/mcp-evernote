@@ -1517,7 +1517,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const healthStatus: any = {
           server: {
             name: 'mcp-evernote',
-            version: '1.2.0',
+            version: '1.2.3',
             status: 'running',
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
