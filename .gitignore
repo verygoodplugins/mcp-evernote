@@ -18,3 +18,5 @@ junit.xml
 test-results/
 cc-working-*/
 cc-out-*/
+.mcpregistry_registry_token
+.mcpregistry_github_token
