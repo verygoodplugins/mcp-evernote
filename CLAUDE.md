@@ -46,13 +46,13 @@ The authentication system detects the runtime environment and adapts accordingly
 2. **Token Resolution Order**:
    - Environment variables (`EVERNOTE_ACCESS_TOKEN`)
    - Claude Code OAuth tokens (`OAUTH_TOKEN`)
-   - Persisted token file (`.evernote-token.json`)
-   - Falls back to prompting for authentication
+   - Persisted token file (`.evernote-token.json`) for compatibility
+   - If none are found, emits clear instructions to stderr for Claude to relay to user
 
 3. **Standalone Auth** (`src/auth-standalone.ts`):
    - Launches Express server on configurable port
    - Handles OAuth callback and token exchange
-   - Persists tokens for Claude Desktop usage
+   - Saves `.evernote-token.json` and displays token for env-var migration
 
 ### Evernote API Integration
 The `EvernoteAPI` class (`src/evernote-api.ts`) wraps the Evernote SDK:
@@ -100,14 +100,16 @@ Required:
 Optional:
 - `EVERNOTE_ENVIRONMENT`: 'production' (default) or 'sandbox'
 - `OAUTH_CALLBACK_PORT`: OAuth server port (default 3000)
-- `EVERNOTE_ACCESS_TOKEN`: Direct token (bypasses OAuth)
+- `EVERNOTE_ACCESS_TOKEN`: Access token (primary auth method)
+- `EVERNOTE_WEBHOOK_SECRET`: HMAC secret for signing webhook payloads
+- `EVERNOTE_ALLOWED_FILE_ROOTS`: path-delimited list of allowed local attachment roots
 
 ## Testing Considerations
 
 ### OAuth Testing
 - Sandbox environment available for testing (`EVERNOTE_ENVIRONMENT=sandbox`)
 - Requires separate sandbox account at sandbox.evernote.com
-- Token file can be manually created for CI/CD environments
+- Set `EVERNOTE_ACCESS_TOKEN` env var for CI/CD environments; `.evernote-token.json` remains a local fallback
 
 ### Tool Testing
 - Each tool can be tested independently via MCP protocol
@@ -129,5 +131,5 @@ Optional:
 
 ### Claude Desktop Integration
 - Requires manual OAuth via `npm run auth`
-- Token persisted to `.evernote-token.json`
-- Config added to `claude_desktop_config.json`
+- Token is saved to `.evernote-token.json` for compatibility and displayed for env-var configuration
+- Prefer `EVERNOTE_ACCESS_TOKEN` in `claude_desktop_config.json` for new setups

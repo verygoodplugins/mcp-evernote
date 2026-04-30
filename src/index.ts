@@ -7,19 +7,35 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { config } from 'dotenv';
+import { ZodError } from 'zod';
 import { EvernoteOAuth } from './oauth.js';
 import { EvernoteAPI } from './evernote-api.js';
 import { EvernoteConfig } from './types.js';
+import { validateToolArgs } from './tool-schemas.js';
+import { computeWebhookSignature } from './webhook.js';
 
 // Load environment variables
 config();
 
-// Validate required environment variables
+// Validate required environment variables with clear instructions
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
 const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || 'production';
 if (!CONSUMER_KEY || !CONSUMER_SECRET) {
-  console.error('Missing required environment variables: EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET');
+  console.error('');
+  console.error('=== IMPORTANT: RELAY THIS MESSAGE TO THE USER IMMEDIATELY ===');
+  console.error('');
+  console.error('EVERNOTE MCP SERVER - CONFIGURATION ERROR');
+  console.error('');
+  console.error('Missing required environment variables:');
+  if (!CONSUMER_KEY) console.error('  - EVERNOTE_CONSUMER_KEY (get from https://dev.evernote.com/)');
+  if (!CONSUMER_SECRET) console.error('  - EVERNOTE_CONSUMER_SECRET (get from https://dev.evernote.com/)');
+  console.error('');
+  console.error('Set these in your MCP server configuration:');
+  console.error('  claude mcp add evernote <command> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret>');
+  console.error('');
+  console.error('=== END OF MESSAGE TO RELAY ===');
+  console.error('');
   process.exit(1);
 }
 
@@ -31,6 +47,7 @@ const POLL_INTERVAL = Math.max(
   parseInt(process.env.EVERNOTE_POLL_INTERVAL || String(DEFAULT_POLL_INTERVAL), 10)
 );
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
+const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
 const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === 'true';
 
 // Polling state
@@ -120,20 +137,32 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
     return;
   }
 
+  if (!WEBHOOK_SECRET) {
+    console.error('Warning: EVERNOTE_WEBHOOK_SECRET not set - webhook payloads are unsigned');
+  }
+
   // Send one webhook per change for cleaner workflow processing
   for (const change of changes) {
     try {
+      const body = JSON.stringify({
+        source: 'mcp-evernote',
+        timestamp: new Date().toISOString(),
+        changes: [change], // Single change per webhook
+      });
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Evernote-Source': 'mcp-evernote-polling',
+      };
+
+      if (WEBHOOK_SECRET) {
+        headers['X-Evernote-Signature'] = computeWebhookSignature(body, WEBHOOK_SECRET);
+      }
+
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Evernote-Source': 'mcp-evernote-polling',
-        },
-        body: JSON.stringify({
-          source: 'mcp-evernote',
-          timestamp: new Date().toISOString(),
-          changes: [change], // Single change per webhook
-        }),
+        headers,
+        body,
       });
 
       if (!response.ok) {
@@ -302,6 +331,7 @@ function getPollingStatus(): any {
     intervalMinutes: POLL_INTERVAL / 60000,
     minIntervalMinutes: MIN_POLL_INTERVAL / 60000,
     webhookUrl: WEBHOOK_URL ? WEBHOOK_URL.substring(0, 50) + '...' : null,
+    webhookSecretConfigured: !!WEBHOOK_SECRET,
     lastPollTime: lastPollTime ? new Date(lastPollTime).toISOString() : null,
     lastUpdateCount,
     errorCount: pollErrorCount,
@@ -426,8 +456,12 @@ const tools: Tool[] = [
         },
         forceUpdate: {
           type: 'boolean',
-          description: 'Force update by creating a new note if update fails due to locks',
+          description: 'DESTRUCTIVE: If true and update fails due to edit lock, DELETES the original note and creates a replacement. The note GUID will change, note history will be lost, and timestamps will reset. Only use as a last resort after confirming with the user.',
           default: false,
+        },
+        forceUpdateConfirmation: {
+          type: 'string',
+          description: 'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
         },
       },
       required: ['guid'],
@@ -770,6 +804,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  // Validate tool arguments against Zod schemas
+  let validatedArgs: any;
+  try {
+    validatedArgs = validateToolArgs(name, args);
+  } catch (error: any) {
+    if (error instanceof ZodError) {
+      const issues = error.issues
+        .map(i => {
+          const issuePath = i.path.length > 0 ? i.path.join('.') : '(root)';
+          return `${issuePath}: ${i.message}`;
+        })
+        .join('; ');
+      return {
+        content: [{ type: 'text', text: `Validation error: ${issues}` }],
+        isError: true,
+      };
+    }
+    throw error;
+  }
+
   try {
     // Handle auth revocation specially
     if (name === 'evernote_revoke_auth') {
@@ -896,7 +950,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     switch (name) {
       case 'evernote_create_note': {
-        const { title, content, notebookName, tags } = args as any;
+        const { title, content, notebookName, tags } = validatedArgs;
         
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
@@ -928,7 +982,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_search_notes': {
-        const { query, notebookName, maxResults = 20, includePreview = false } = args as any;
+        const { query, notebookName, maxResults = 20, includePreview = false } = validatedArgs;
 
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
@@ -1012,7 +1066,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_note': {
-        const { guid, includeContent = true } = args as any;
+        const { guid, includeContent = true } = validatedArgs;
         const note = await evernoteApi.getNote(guid, includeContent, includeContent);
         
         const result: any = {
@@ -1041,41 +1095,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_note': {
-        const { guid, title, content, tags, forceUpdate = false } = args as any;
+        const { guid, title, content, tags, forceUpdate = false } = validatedArgs;
         
-        console.error(`=== Update Note Debug ===`);
-        console.error(`GUID: ${guid}`);
-        console.error(`Title: ${title || 'unchanged'}`);
-        console.error(`Content: ${content ? `${content.length} chars` : 'unchanged'}`);
-        console.error(`Tags: ${tags ? JSON.stringify(tags) : 'unchanged'}`);
-        console.error(`========================`);
+        console.error(`Updating note ${guid}`);
         
         try {
           // Get existing note
-          console.error(`Step 1: Getting existing note ${guid}...`);
           const note = await evernoteApi.getNote(guid, true, true);
-          console.error(`Step 1 complete: Retrieved note "${note.title}"`);
-          
+
           // Update fields
           if (title !== undefined) {
-            console.error(`Step 2: Updating title from "${note.title}" to "${title}"`);
             note.title = title;
           }
-          
+
           if (content !== undefined) {
-            console.error(`Step 3: Updating content (${content.length} chars)...`);
             await evernoteApi.applyMarkdownToNote(note, content);
-            console.error(`Step 3 complete: Content updated`);
           }
-          
+
           if (tags !== undefined) {
-            console.error(`Step 4: Updating tags to ${JSON.stringify(tags)}`);
             note.tagNames = tags;
           }
 
-          console.error(`Step 5: Calling updateNote API...`);
           const updatedNote = await evernoteApi.updateNote(note);
-          console.error(`Step 5 complete: Note updated successfully`);
 
           return {
             content: [
@@ -1086,15 +1127,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         } catch (stepError: any) {
-          console.error(`=== Update Note Step Failed ===`);
-          console.error(`Step Error: ${stepError.message}`);
-          console.error(`Error Code: ${stepError.errorCode}`);
-          console.error(`Step Stack: ${stepError.stack}`);
-          console.error(`==============================`);
+          console.error(`Update failed for ${guid}: code=${stepError.errorCode || 'none'}`);
           
-          // Handle RTE room conflict with forceUpdate option
+          // Handle RTE room conflict with forceUpdate option (requires confirmation)
           if (stepError.errorCode === 19 && forceUpdate) {
-            console.error(`Attempting force update by creating new note...`);
+            console.error(`DESTRUCTIVE: Force update triggered for ${guid} - will delete original and create replacement`);
             try {
               // Get the original note again for force update
               const originalNote = await evernoteApi.getNote(guid, true, true);
@@ -1133,7 +1170,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_delete_note': {
-        const { guid } = args as any;
+        const { guid } = validatedArgs;
         await evernoteApi.deleteNote(guid);
         
         return {
@@ -1160,7 +1197,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_create_notebook': {
-        const { name, stack } = args as any;
+        const { name, stack } = validatedArgs;
         const notebook = await evernoteApi.createNotebook(name, stack);
         
         return {
@@ -1187,7 +1224,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_create_tag': {
-        const { name, parentTagName } = args as any;
+        const { name, parentTagName } = validatedArgs;
         
         // Find parent tag GUID if name provided
         let parentGuid: string | undefined;
@@ -1237,7 +1274,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Resource tools
       case 'evernote_get_resource': {
-        const { guid, includeData = true } = args as any;
+        const { guid, includeData = true } = validatedArgs;
         const resource = await evernoteApi.getResource(guid, includeData);
 
         const result: any = {
@@ -1265,7 +1302,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_list_note_resources': {
-        const { noteGuid } = args as any;
+        const { noteGuid } = validatedArgs;
         const resources = await evernoteApi.listNoteResources(noteGuid);
 
         return {
@@ -1279,7 +1316,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_add_resource_to_note': {
-        const { noteGuid, filePath, filename } = args as any;
+        const { noteGuid, filePath, filename } = validatedArgs;
         const updatedNote = await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
 
         return {
@@ -1293,7 +1330,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_resource_recognition': {
-        const { resourceGuid } = args as any;
+        const { resourceGuid } = validatedArgs;
         const recognition = await evernoteApi.getResourceRecognition(resourceGuid);
 
         // Extract just the text for a summary
@@ -1321,7 +1358,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Notebook get/update tools
       case 'evernote_get_notebook': {
-        const { name, guid } = args as any;
+        const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
           throw new Error('Either name or guid must be provided');
@@ -1351,7 +1388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_notebook': {
-        const { guid, name, stack } = args as any;
+        const { guid, name, stack } = validatedArgs;
         const notebook = await evernoteApi.getNotebook(guid);
 
         if (name !== undefined) {
@@ -1375,7 +1412,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Tag get/update tools
       case 'evernote_get_tag': {
-        const { name, guid } = args as any;
+        const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
           throw new Error('Either name or guid must be provided');
@@ -1405,7 +1442,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_tag': {
-        const { guid, name, parentTagName } = args as any;
+        const { guid, name, parentTagName } = validatedArgs;
         const tag = await evernoteApi.getTag(guid);
 
         if (name !== undefined) {
@@ -1437,7 +1474,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_patch_note': {
-        const { guid, replacements } = args as any;
+        const { guid, replacements } = validatedArgs;
 
         if (!replacements || !Array.isArray(replacements) || replacements.length === 0) {
           throw new Error('At least one replacement must be provided');
@@ -1479,13 +1516,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_health_check': {
-        const { verbose = false } = args as any;
+        const { verbose = false } = validatedArgs;
 
         // Basic server info
         const healthStatus: any = {
           server: {
             name: 'mcp-evernote',
-            version: '1.2.0',
+            version: '1.2.3',
             status: 'running',
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
@@ -1665,42 +1702,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
     
-    // Enhanced error logging with debug information
-    const errorInfo = {
-      tool: name,
-      arguments: args,
-      timestamp: new Date().toISOString(),
-      error: {
-        message: error.message,
-        name: error.name,
-        stack: error.stack,
-        // Include Evernote-specific error details if available
-        ...(error.errorCode && { errorCode: error.errorCode }),
-        ...(error.parameter && { parameter: error.parameter }),
-        ...(error.rateLimitDuration && { rateLimitDuration: error.rateLimitDuration }),
-      },
-      environment: {
-        apiInitialized: !!api,
-        apiInitError,
-        environment: ENVIRONMENT,
-        hasTokens: !!(process.env.EVERNOTE_ACCESS_TOKEN || process.env.OAUTH_TOKEN),
-      }
-    };
-    
-    console.error('=== MCP Tool Execution Failed ===');
-    console.error(JSON.stringify(errorInfo, null, 2));
-    console.error('================================');
+    const timestamp = new Date().toISOString();
 
-    // Return detailed error information instead of throwing
+    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}`);
+
+    // Return error information without sensitive data
     return {
       content: [
         {
           type: 'text',
-          text: `❌ Tool execution failed: ${name}\n\n` +
-                `Error: ${error.message}\n\n` +
-                `Arguments: ${JSON.stringify(args, null, 2)}\n\n` +
-                `Timestamp: ${errorInfo.timestamp}\n\n` +
-                `Debug Info:\n${JSON.stringify(errorInfo, null, 2)}`,
+          text: `Tool execution failed: ${name}\n\n` +
+                `Error: ${error.message}\n` +
+                `Timestamp: ${timestamp}` +
+                (error.errorCode ? `\nError code: ${error.errorCode}` : ''),
         },
       ],
       isError: true,
@@ -1708,40 +1722,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Handle unhandled rejections to prevent server crash
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('=== Unhandled Rejection ===');
-  console.error('Reason:', reason);
-  console.error('Promise:', promise);
-  console.error('=========================');
-  
-  // If it's an authentication error, reset API state
-  if (reason?.message?.includes('Authentication') || 
-      reason?.message?.includes('token') ||
-      reason?.message?.includes('AUTHENTICATION_EXPIRED')) {
-    console.error('Detected authentication error in unhandled rejection, resetting API state');
-    api = null;
-    apiInitError = null;
-    lastInitAttempt = 0;
-  }
+// Handle unhandled rejections - log and exit
+process.on('unhandledRejection', (reason: any) => {
+  console.error('Fatal: Unhandled rejection - process will exit');
+  console.error('Reason:', reason?.message || reason);
+  // Allow time for logs to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions - log and exit
 process.on('uncaughtException', (error: Error) => {
-  console.error('=== Uncaught Exception ===');
-  console.error('Error:', error);
-  console.error('Stack:', error.stack);
-  console.error('========================');
-  
-  // Don't exit the process - try to recover
-  if (error.message?.includes('Authentication') || 
-      error.message?.includes('token') ||
-      error.message?.includes('AUTHENTICATION_EXPIRED')) {
-    console.error('Detected authentication error in uncaught exception, resetting API state');
-    api = null;
-    apiInitError = null;
-    lastInitAttempt = 0;
-  }
+  console.error('Fatal: Uncaught exception - process will exit');
+  console.error('Error:', error.message);
+  // Allow time for logs to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
 });
 
 // Start server

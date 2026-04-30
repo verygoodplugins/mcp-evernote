@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import os from 'os';
 import path from 'path';
@@ -8,6 +8,7 @@ import sanitizeHtml from 'sanitize-html';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { lookup as lookupMimeType } from 'mime-types';
+import { validateLocalFilePathSync } from './path-security.js';
 
 export interface MarkdownExistingResource {
   hashHex: string;
@@ -86,6 +87,27 @@ export function markdownToENML(
     allowedAttributes,
     allowedSchemes: ['http', 'https', 'mailto'],
     selfClosing: ['en-todo', 'en-media', 'br', 'hr'],
+    transformTags: {
+      'a': (tagName: string, attribs: Record<string, string>) => {
+        if (attribs.href) {
+          const cleaned = stripControlCharacters(attribs.href).trim().toLowerCase();
+          // Blacklist dangerous schemes
+          const dangerousSchemes = ['javascript:', 'data:', 'vbscript:', 'blob:'];
+          if (dangerousSchemes.some(s => cleaned.startsWith(s))) {
+            return { tagName, attribs: { ...attribs, href: '' } };
+          }
+          // For absolute URLs, whitelist allowed schemes only
+          const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(cleaned);
+          if (hasScheme) {
+            const safeSchemes = ['http:', 'https:', 'mailto:'];
+            if (!safeSchemes.some(s => cleaned.startsWith(s))) {
+              return { tagName, attribs: { ...attribs, href: '' } };
+            }
+          }
+        }
+        return { tagName, attribs };
+      },
+    },
   });
 
   return {
@@ -236,11 +258,33 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
     // ignore decode errors
   }
 
+  if (candidate.startsWith('~/')) {
+    candidate = path.join(os.homedir(), candidate.slice(2));
+  }
+
+  if (path.isAbsolute(candidate)) {
+    const validatedPath = validateLocalFilePathSync(candidate);
+    if (!validatedPath) {
+      return null;
+    }
+
+    return {
+      path: validatedPath,
+      sourceURL: pathToFileURL(validatedPath).toString(),
+    };
+  }
+
   try {
     const fileUrl = new URL(candidate);
     if (fileUrl.protocol === 'file:') {
+      const filePath = fileURLToPath(fileUrl);
+      const validatedPath = validateLocalFilePathSync(filePath);
+      if (!validatedPath) {
+        console.warn(`Path rejected (security): ${filePath} is outside allowed file roots`);
+        return null;
+      }
       return {
-        path: fileURLToPath(fileUrl),
+        path: validatedPath,
         sourceURL: fileUrl.toString(),
       };
     }
@@ -256,22 +300,29 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
     return null;
   }
 
-  if (candidate.startsWith('~/')) {
-    candidate = path.join(os.homedir(), candidate.slice(2));
-  }
-
   const absolute = path.isAbsolute(candidate)
     ? candidate
     : path.resolve(process.cwd(), candidate);
 
-  if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+  const validatedPath = validateLocalFilePathSync(absolute);
+  if (!validatedPath) {
     return null;
   }
 
   return {
-    path: absolute,
-    sourceURL: pathToFileURL(absolute).toString(),
+    path: validatedPath,
+    sourceURL: pathToFileURL(validatedPath).toString(),
   };
+}
+
+function stripControlCharacters(value: string): string {
+  let cleaned = '';
+  for (const char of value) {
+    if (char.charCodeAt(0) >= 32) {
+      cleaned += char;
+    }
+  }
+  return cleaned;
 }
 
 function buildExistingResourceMap(resources: MarkdownExistingResource[] | undefined) {

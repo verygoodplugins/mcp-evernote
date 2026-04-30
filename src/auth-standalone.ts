@@ -17,7 +17,6 @@ import { stdin, stdout } from 'process';
 config();
 
 const tokenFile = path.join(process.cwd(), '.evernote-token.json');
-const credentialsFile = path.join(process.cwd(), '.evernote-credentials.json');
 
 interface Credentials {
   consumerKey: string;
@@ -37,15 +36,8 @@ async function getCredentials(): Promise<Credentials> {
     };
   }
 
-  // Check for saved credentials file
-  try {
-    const data = await fs.readFile(credentialsFile, 'utf-8');
-    const saved = JSON.parse(data);
-    console.log('✅ Found saved credentials');
-    return saved;
-  } catch (error) {
-    // No saved credentials, need to prompt
-  }
+  // Credentials are not saved to disk. They must come from environment
+  // variables or be entered each time.
 
   // Prompt for credentials
   console.log('\n🔐 Evernote API Credentials Required');
@@ -76,9 +68,6 @@ async function getCredentials(): Promise<Credentials> {
     const portAnswer = await rl.question('OAuth callback port [3000]: ');
     const callbackPort = parseInt(portAnswer.trim() || '3000');
 
-    const saveAnswer = await rl.question('\nSave credentials for future use? (y/N): ');
-    const shouldSave = saveAnswer.toLowerCase() === 'y';
-
     const credentials: Credentials = {
       consumerKey: consumerKey.trim(),
       consumerSecret: consumerSecret.trim(),
@@ -86,11 +75,8 @@ async function getCredentials(): Promise<Credentials> {
       callbackPort
     };
 
-    if (shouldSave) {
-      await fs.writeFile(credentialsFile, JSON.stringify(credentials, null, 2));
-      console.log('✅ Credentials saved to .evernote-credentials.json');
-      console.log('⚠️  Remember to add .evernote-credentials.json to your .gitignore!');
-    }
+    // Credentials are not saved to disk for security.
+    // Set them as environment variables in your MCP configuration.
 
     return credentials;
   } finally {
@@ -205,7 +191,6 @@ async function performOAuth(credentials: Credentials) {
               const user = await userStore.getUser();
               
               const tokenData = {
-                // Keep token file compatible with src/oauth.ts (expects `token`)
                 token: accessToken,
                 noteStoreUrl,
                 webApiUrlPrefix: results.edam_webApiUrlPrefix,
@@ -215,9 +200,6 @@ async function performOAuth(credentials: Credentials) {
                 environment: credentials.environment
               };
               
-              // Save token
-              await fs.writeFile(tokenFile, JSON.stringify(tokenData, null, 2));
-              
               res.send(`
                 <html>
                   <head>
@@ -225,15 +207,19 @@ async function performOAuth(credentials: Credentials) {
                       body { font-family: -apple-system, system-ui, sans-serif; padding: 40px; text-align: center; }
                       h1 { color: #00a82d; }
                       .success { background: #f0f9f0; padding: 20px; border-radius: 8px; margin: 20px 0; }
-                      code { background: #e8e8e8; padding: 4px 8px; border-radius: 4px; }
+                      code { background: #e8e8e8; padding: 4px 8px; border-radius: 4px; word-break: break-all; }
+                      .warning { background: #fff9e6; padding: 12px; border-radius: 8px; margin: 12px 0; }
                     </style>
                   </head>
                   <body>
-                    <h1>✅ Authentication Successful!</h1>
+                    <h1>Authentication Successful!</h1>
                     <div class="success">
                       <p>Authenticated as: <strong>${user.username}</strong></p>
-                      <p>Token saved to: <code>.evernote-token.json</code></p>
                       <p>Environment: <strong>${credentials.environment}</strong></p>
+                    </div>
+                    <div class="warning">
+                      <p><strong>Copy your token from the terminal output if you prefer environment variables.</strong></p>
+                      <p>The token was also saved to <code>.evernote-token.json</code> for compatibility.</p>
                     </div>
                     <p>You can close this window and return to your terminal.</p>
                   </body>
@@ -243,10 +229,23 @@ async function performOAuth(credentials: Credentials) {
               console.log('\n✅ Authentication complete!');
               console.log('  - User:', user.username);
               console.log('  - User ID:', tokenData.userId);
+              await fs.writeFile(tokenFile, JSON.stringify(tokenData, null, 2));
               console.log('  - Token saved to:', tokenFile);
               if (tokenData.expires) {
                 console.log('  - Expires:', new Date(tokenData.expires).toLocaleString());
               }
+              console.log('');
+              console.log('=== YOUR ACCESS TOKEN (copy this) ===');
+              console.log(accessToken);
+              console.log('======================================');
+              console.log('');
+              console.log('Set this as an environment variable in your MCP configuration:');
+              console.log('  EVERNOTE_ACCESS_TOKEN=' + accessToken);
+              if (noteStoreUrl) {
+                console.log('  EVERNOTE_NOTESTORE_URL=' + noteStoreUrl);
+              }
+              console.log('');
+              console.log('A compatible .evernote-token.json was also saved.');
               
               server.close();
               resolve(tokenData);
@@ -310,29 +309,24 @@ async function main() {
     await performOAuth(credentials);
     
     console.log('\n✅ Setup complete!');
-    console.log('\nNext steps for Claude Desktop:');
-    console.log('1. Add the following to your Claude Desktop config:');
-    console.log('   Location: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)');
-    console.log('             %APPDATA%\\Claude\\claude_desktop_config.json (Windows)\n');
-    // Mask credentials in the example output for security
-    // lgtm[js/clear-text-logging] - credentials are intentionally masked before logging
-    const maskedKey = credentials.consumerKey.substring(0, 4) + '***';
-    const maskedSecret = '***' + credentials.consumerSecret.substring(credentials.consumerSecret.length - 4);
-    console.log(JSON.stringify({
-      mcpServers: {
-        evernote: {
-          command: "npx",
-          args: ["@verygoodplugins/mcp-evernote"],
-          env: {
-            EVERNOTE_CONSUMER_KEY: `${maskedKey} (use your actual key)`,
-            EVERNOTE_CONSUMER_SECRET: `${maskedSecret} (use your actual secret)`,
-            EVERNOTE_ENVIRONMENT: credentials.environment
-          }
-        }
-      }
-    }, null, 2));
-    console.log('\n2. Restart Claude Desktop');
-    console.log('3. Start using Evernote tools in your conversations!');
+    console.log('\nRecommended: set the following environment variables in your MCP configuration:');
+    console.log('');
+    console.log('  EVERNOTE_CONSUMER_KEY=<your-key>');
+    console.log('  EVERNOTE_CONSUMER_SECRET=<your-secret>');
+    console.log('  EVERNOTE_ACCESS_TOKEN=<token-from-above>');
+    console.log('  EVERNOTE_ENVIRONMENT=' + credentials.environment);
+    console.log('');
+    console.log('For Claude Code:');
+    console.log('  claude mcp add evernote "npx @verygoodplugins/mcp-evernote" \\');
+    console.log('    --env EVERNOTE_CONSUMER_KEY=<key> \\');
+    console.log('    --env EVERNOTE_CONSUMER_SECRET=<secret> \\');
+    console.log('    --env EVERNOTE_ACCESS_TOKEN=<token>');
+    console.log('');
+    console.log('For Claude Desktop, add to claude_desktop_config.json:');
+    console.log('  "env": { "EVERNOTE_CONSUMER_KEY": "...", "EVERNOTE_CONSUMER_SECRET": "...", "EVERNOTE_ACCESS_TOKEN": "..." }');
+    console.log('');
+    console.log('Compatibility fallback: .evernote-token.json was saved in this directory.');
+    console.log('Restart your MCP client after updating configuration.');
     
   } catch (error: any) {
     console.error('\n❌ Authentication failed:', error.message);
