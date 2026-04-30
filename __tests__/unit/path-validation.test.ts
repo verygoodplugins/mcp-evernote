@@ -45,7 +45,7 @@ describe('safe local file path validation', () => {
   });
 
   it('accepts files inside configured roots', async () => {
-    const realSafeFile = realpathSync(safeFile);
+    const realSafeFile = realpathSync.native(safeFile);
     await expect(validateLocalFilePath(safeFile)).resolves.toBe(realSafeFile);
     expect(validateLocalFilePathSync(safeFile)).toBe(realSafeFile);
   });
@@ -73,8 +73,8 @@ describe('safe local file path validation', () => {
     writeFileSync(homeFile, 'home');
 
     try {
-      expect(validateLocalFilePathSync(homeFile)).toBe(realpathSync(homeFile));
-      expect(getAllowedFileRoots()).toContain(realpathSync(os.homedir()));
+      expect(validateLocalFilePathSync(homeFile)).toBe(realpathSync.native(homeFile));
+      expect(getAllowedFileRoots()).toContain(realpathSync.native(os.homedir()));
     } finally {
       rmSync(homeFile, { force: true });
     }

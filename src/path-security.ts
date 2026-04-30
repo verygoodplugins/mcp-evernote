@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'fs';
-import { realpath, stat } from 'fs/promises';
+import { stat } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
@@ -24,15 +24,22 @@ function normalizeRoot(root: string): string | null {
   const absolute = path.resolve(expanded);
 
   try {
-    return realpathSync(absolute);
+    return realpathSync.native(absolute);
   } catch {
     return null;
   }
 }
 
 function isWithinRoot(realCandidate: string, realRoot: string): boolean {
-  const relative = path.relative(realRoot, realCandidate);
+  const candidate = comparablePath(realCandidate);
+  const root = comparablePath(realRoot);
+  const relative = path.relative(root, candidate);
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function comparablePath(filePath: string): string {
+  const normalized = path.normalize(filePath);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 export function getAllowedFileRoots(): string[] {
@@ -47,7 +54,7 @@ export function validateLocalFilePathSync(filePath: string): string | null {
     return null;
   }
 
-  const realCandidate = realpathSync(absolute);
+  const realCandidate = realpathSync.native(absolute);
   if (!statSync(realCandidate).isFile()) {
     return null;
   }
@@ -64,7 +71,7 @@ export async function validateLocalFilePath(filePath: string): Promise<string> {
   const absolute = path.resolve(filePath);
   let realCandidate: string;
   try {
-    realCandidate = await realpath(absolute);
+    realCandidate = realpathSync.native(absolute);
   } catch {
     throw new Error(`File path rejected: ${absolute} does not exist`);
   }
