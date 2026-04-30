@@ -258,6 +258,22 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
     // ignore decode errors
   }
 
+  if (candidate.startsWith('~/')) {
+    candidate = path.join(os.homedir(), candidate.slice(2));
+  }
+
+  if (path.isAbsolute(candidate)) {
+    const validatedPath = validateLocalFilePathSync(candidate);
+    if (!validatedPath) {
+      return null;
+    }
+
+    return {
+      path: validatedPath,
+      sourceURL: pathToFileURL(validatedPath).toString(),
+    };
+  }
+
   try {
     const fileUrl = new URL(candidate);
     if (fileUrl.protocol === 'file:') {
@@ -282,10 +298,6 @@ function resolveLocalPath(href: string): { path: string; sourceURL: string } | n
 
   if (/^[a-zA-Z]+:/.test(candidate)) {
     return null;
-  }
-
-  if (candidate.startsWith('~/')) {
-    candidate = path.join(os.homedir(), candidate.slice(2));
   }
 
   const absolute = path.isAbsolute(candidate)

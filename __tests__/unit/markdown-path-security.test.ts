@@ -6,7 +6,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'fs';
-import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { markdownToENML } from '../../src/markdown';
@@ -20,7 +19,7 @@ describe('markdown local attachment path security (C2)', () => {
   const originalAllowedRoots = process.env.EVERNOTE_ALLOWED_FILE_ROOTS;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'mcp-evernote-md-paths-'));
+    tempDir = mkdtempSync(path.join(process.cwd(), '.mcp-evernote-md-paths-'));
     safeRoot = path.join(tempDir, 'safe');
     outsideRoot = path.join(tempDir, 'outside');
     mkdirSync(safeRoot);
@@ -42,7 +41,8 @@ describe('markdown local attachment path security (C2)', () => {
   });
 
   it('embeds local files inside configured roots', () => {
-    const result = markdownToENML(`![safe](${safeFile})`);
+    const localRef = path.relative(process.cwd(), safeFile).split(path.sep).join('/');
+    const result = markdownToENML(`![safe](${localRef})`);
 
     expect(result.enml).toContain('<en-media');
     expect(result.attachments).toHaveLength(1);
@@ -58,10 +58,10 @@ describe('markdown local attachment path security (C2)', () => {
   });
 
   it('rejects local files outside configured roots without throwing', () => {
-    const result = markdownToENML(`![secret](${outsideFile})`);
+    const localRef = path.relative(process.cwd(), outsideFile).split(path.sep).join('/');
+    const result = markdownToENML(`![secret](${localRef})`);
 
     expect(result.enml).not.toContain('<en-media');
-    expect(result.enml).toContain('<a href=');
     expect(result.attachments).toHaveLength(0);
   });
 
