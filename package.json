@@ -6,7 +6,7 @@
   "type": "module",
   "mcpName": "io.github.verygoodplugins/mcp-evernote",
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=18.18.0"
   },
   "bin": {
     "mcp-evernote": "dist/index.js",
