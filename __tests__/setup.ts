@@ -1,4 +1,4 @@
-import { jest } from '@jest/globals';
+import { afterAll, jest } from '@jest/globals';
 
 // Mock environment variables
 process.env.EVERNOTE_CONSUMER_KEY = 'test-consumer-key';
