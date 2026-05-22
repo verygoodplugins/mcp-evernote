@@ -203,7 +203,7 @@ async function checkForChanges(): Promise<PollingChange[]> {
     }
 
     console.error(
-      `Polling: Changes detected! Getting sync chunk from USN ${previousUpdateCount}...`
+      `Polling: Changes detected since USN ${previousUpdateCount}`
     );
 
     if (result.error) {
