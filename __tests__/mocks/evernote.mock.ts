@@ -23,7 +23,7 @@ export const mockNoteStore = {
   updateTag: jest.fn() as jest.MockedFunction<any>,
   expungeTag: jest.fn() as jest.MockedFunction<any>,
   getSyncState: jest.fn() as jest.MockedFunction<any>,
-  getSyncChunk: jest.fn() as jest.MockedFunction<any>,
+  getFilteredSyncChunk: jest.fn() as jest.MockedFunction<any>,
   // Resource operations
   getResource: jest.fn() as jest.MockedFunction<any>,
   getResourceRecognition: jest.fn() as jest.MockedFunction<any>,
@@ -71,6 +71,11 @@ export const mockEvernoteTypes = {
 };
 
 export const mockEvernoteNoteStore = {
+  SyncChunkFilter: jest
+    .fn()
+    .mockImplementation((filter: unknown) =>
+      filter && typeof filter === 'object' ? { ...filter } : {}
+    ),
   NoteFilter: jest.fn().mockImplementation(() => ({
     words: '',
     notebookGuid: null,
@@ -112,7 +117,8 @@ mockEvernoteClient.getUserStore.mockReturnValue(mockUserStore);
 export const sampleNote = {
   guid: 'note-guid-123',
   title: 'Test Note',
-  content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>Test content</en-note>',
+  content:
+    '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>Test content</en-note>',
   created: Date.now(),
   updated: Date.now(),
   tagNames: ['test-tag'],
@@ -139,7 +145,8 @@ export const sampleNoteMetadata = {
 export const sampleNoteWithLongContent = {
   guid: 'note-guid-123',
   title: 'Test Note',
-  content: '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note><div>This is a longer note with some interesting content that will be truncated when generating a preview. The preview should show only the first few hundred characters and end with an ellipsis.</div></en-note>',
+  content:
+    '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note><div>This is a longer note with some interesting content that will be truncated when generating a preview. The preview should show only the first few hundred characters and end with an ellipsis.</div></en-note>',
   created: Date.now(),
   updated: Date.now(),
 };
@@ -277,13 +284,13 @@ export const resetMocks = () => {
       mock.mockClear();
     }
   });
-  
+
   Object.values(mockUserStore).forEach((mock: any) => {
     if (jest.isMockFunction(mock)) {
       mock.mockClear();
     }
   });
-  
+
   mockEvernoteClient.getNoteStore.mockClear();
   mockEvernoteClient.getUserStore.mockClear();
 };

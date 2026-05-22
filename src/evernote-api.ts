@@ -522,8 +522,16 @@ export class EvernoteAPI {
     return await this.noteStore.getSyncState();
   }
 
-  async getSyncChunk(afterUSN: number, maxEntries: number = 100, fullSyncOnly: boolean = false): Promise<any> {
-    return await this.noteStore.getSyncChunk(afterUSN, maxEntries, fullSyncOnly);
+  async getFilteredSyncChunk(afterUSN: number, maxEntries: number = 100, filter: any): Promise<any> {
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    const SyncChunkFilter = EvernoteModule.NoteStore?.SyncChunkFilter;
+    const sdkFilter = SyncChunkFilter ? new SyncChunkFilter(filter) : filter;
+
+    return await this.noteStore.getFilteredSyncChunk(
+      afterUSN,
+      maxEntries,
+      sdkFilter
+    );
   }
 
   // Helper methods

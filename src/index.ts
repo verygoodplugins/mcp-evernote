@@ -13,6 +13,11 @@ import { EvernoteAPI } from './evernote-api.js';
 import { EvernoteConfig } from './types.js';
 import { validateToolArgs } from './tool-schemas.js';
 import { computeWebhookSignature } from './webhook.js';
+import {
+  PollingChange,
+  buildWebhookPayload,
+  checkForPollingChanges,
+} from './polling.js';
 
 // Load environment variables
 config();
@@ -123,14 +128,6 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
 // Polling for Changes
 // ============================================================================
 
-interface PollingChange {
-  type: 'note_created' | 'note_updated' | 'note_deleted' | 'notebook_changed' | 'tag_changed';
-  guid?: string;
-  title?: string;
-  notebookGuid?: string;
-  timestamp: string;
-}
-
 async function sendWebhookNotification(changes: PollingChange[]): Promise<void> {
   if (!WEBHOOK_URL) {
     console.error('No webhook URL configured, skipping notification');
@@ -144,11 +141,7 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
   // Send one webhook per change for cleaner workflow processing
   for (const change of changes) {
     try {
-      const body = JSON.stringify({
-        source: 'mcp-evernote',
-        timestamp: new Date().toISOString(),
-        changes: [change], // Single change per webhook
-      });
+      const body = JSON.stringify(buildWebhookPayload(change));
 
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -181,92 +174,55 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
 }
 
 async function checkForChanges(): Promise<PollingChange[]> {
-  const changes: PollingChange[] = [];
-  
   try {
     const evernoteApi = await ensureAPI();
-    const syncState = await evernoteApi.getSyncState();
-    const currentUpdateCount = syncState.updateCount;
-    
-    console.error(`Polling: Current updateCount = ${currentUpdateCount}, last = ${lastUpdateCount}`);
-    
+    const previousUpdateCount = lastUpdateCount;
+    const result = await checkForPollingChanges({
+      evernoteApi,
+      lastUpdateCount,
+    });
+
+    console.error(
+      `Polling: Current updateCount = ${result.currentUpdateCount}, last = ${previousUpdateCount}`
+    );
+
     // First run - just store the count
-    if (lastUpdateCount === null) {
-      lastUpdateCount = currentUpdateCount;
+    if (previousUpdateCount === null) {
+      lastUpdateCount = result.nextUpdateCount;
+      pollErrorCount = 0;
       console.error('Polling: Initial sync state captured');
-      return changes;
+      return result.changes;
     }
-    
+
     // No changes
-    if (currentUpdateCount === lastUpdateCount) {
+    if (result.currentUpdateCount === previousUpdateCount) {
+      lastUpdateCount = result.nextUpdateCount;
+      pollErrorCount = 0;
       console.error('Polling: No changes detected');
-      return changes;
+      return result.changes;
     }
-    
-    // Changes detected - get the sync chunk to see what changed
-    console.error(`Polling: Changes detected! Getting sync chunk from USN ${lastUpdateCount}...`);
-    
-    try {
-      const chunk = await evernoteApi.getSyncChunk(lastUpdateCount, 100, false);
-      
-      // Process notes
-      if (chunk.notes && chunk.notes.length > 0) {
-        for (const note of chunk.notes) {
-          const isNew = note.created === note.updated;
-          changes.push({
-            type: isNew ? 'note_created' : 'note_updated',
-            guid: note.guid,
-            title: note.title,
-            notebookGuid: note.notebookGuid,
-            timestamp: new Date(note.updated).toISOString(),
-          });
-        }
+
+    console.error(
+      `Polling: Changes detected since USN ${previousUpdateCount}`
+    );
+
+    if (result.error) {
+      console.error(`Polling: Failed to get sync chunk: ${result.error.message}`);
+      pollErrorCount++;
+
+      if (pollErrorCount >= 5) {
+        console.error('Polling: Too many errors, stopping polling');
+        stopPolling();
       }
-      
-      // Process expunged notes (deleted)
-      if (chunk.expungedNotes && chunk.expungedNotes.length > 0) {
-        for (const guid of chunk.expungedNotes) {
-          changes.push({
-            type: 'note_deleted',
-            guid,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      }
-      
-      // Process notebooks
-      if (chunk.notebooks && chunk.notebooks.length > 0) {
-        for (const notebook of chunk.notebooks) {
-          changes.push({
-            type: 'notebook_changed',
-            guid: notebook.guid,
-            title: notebook.name,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      }
-      
-      // Process tags
-      if (chunk.tags && chunk.tags.length > 0) {
-        for (const tag of chunk.tags) {
-          changes.push({
-            type: 'tag_changed',
-            guid: tag.guid,
-            title: tag.name,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      }
-      
-      console.error(`Polling: Found ${changes.length} changes`);
-    } catch (chunkError: any) {
-      console.error(`Polling: Failed to get sync chunk: ${chunkError.message}`);
-      // Still update the count to avoid re-processing
+
+      lastUpdateCount = result.nextUpdateCount;
+      return result.changes;
     }
-    
-    lastUpdateCount = currentUpdateCount;
-    return changes;
-    
+
+    lastUpdateCount = result.nextUpdateCount;
+    pollErrorCount = 0;
+    console.error(`Polling: Found ${result.changes.length} changes`);
+    return result.changes;
   } catch (error: any) {
     console.error(`Polling error: ${error.message}`);
     pollErrorCount++;
@@ -277,13 +233,12 @@ async function checkForChanges(): Promise<PollingChange[]> {
       stopPolling();
     }
     
-    return changes;
+    return [];
   }
 }
 
 async function pollOnce(): Promise<PollingChange[]> {
   lastPollTime = Date.now();
-  pollErrorCount = 0; // Reset on successful poll attempt
   
   const changes = await checkForChanges();
   
