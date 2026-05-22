@@ -178,5 +178,20 @@ function normalizeError(error: unknown): Error {
     return error;
   }
 
-  return new Error(String(error));
+  if (typeof error === 'string') {
+    return new Error(error);
+  }
+
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      return new Error(message);
+    }
+  }
+
+  try {
+    return new Error(JSON.stringify(error));
+  } catch {
+    return new Error(String(error));
+  }
 }
