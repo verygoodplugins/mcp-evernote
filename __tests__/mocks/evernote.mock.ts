@@ -23,7 +23,7 @@ export const mockNoteStore = {
   updateTag: jest.fn() as jest.MockedFunction<any>,
   expungeTag: jest.fn() as jest.MockedFunction<any>,
   getSyncState: jest.fn() as jest.MockedFunction<any>,
-  getSyncChunk: jest.fn() as jest.MockedFunction<any>,
+  getFilteredSyncChunk: jest.fn() as jest.MockedFunction<any>,
   // Resource operations
   getResource: jest.fn() as jest.MockedFunction<any>,
   getResourceRecognition: jest.fn() as jest.MockedFunction<any>,
@@ -71,6 +71,7 @@ export const mockEvernoteTypes = {
 };
 
 export const mockEvernoteNoteStore = {
+  SyncChunkFilter: jest.fn().mockImplementation(filter => ({ ...filter })),
   NoteFilter: jest.fn().mockImplementation(() => ({
     words: '',
     notebookGuid: null,
