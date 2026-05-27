@@ -183,13 +183,18 @@ async function performOAuth(credentials: Credentials) {
               china: false
             });
             
-            const noteStoreUrl = authenticatedClient.getNoteStore().url;
-            
             // Get user info to verify token
             try {
               const userStore = authenticatedClient.getUserStore();
               const user = await userStore.getUser();
-              
+              // getNoteStore().url is undefined here; getUserUrls() returns the
+              // real noteStoreUrl, falling back to deriving from webApiUrlPrefix.
+              const userUrls = await userStore.getUserUrls();
+              const noteStoreUrl = userUrls?.noteStoreUrl
+                || (results.edam_webApiUrlPrefix
+                  ? results.edam_webApiUrlPrefix.replace(/\/$/, '') + '/notestore'
+                  : undefined);
+
               const tokenData = {
                 token: accessToken,
                 noteStoreUrl,
