@@ -23,6 +23,7 @@ export const UpdateNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   title: z.string().optional(),
   content: z.string().optional(),
+  notebookName: z.string().optional(),
   tags: z.array(z.string()).optional(),
   forceUpdate: z.boolean().optional().default(false),
   forceUpdateConfirmation: z.string().optional(),
