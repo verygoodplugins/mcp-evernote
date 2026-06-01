@@ -14,7 +14,7 @@ import * as readline from 'readline/promises';
 import { stdin, stdout } from 'process';
 
 // Load environment variables
-config();
+config({ quiet: true });
 
 const tokenFile = path.join(process.cwd(), '.evernote-token.json');
 
