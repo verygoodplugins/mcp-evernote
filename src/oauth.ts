@@ -175,7 +175,16 @@ export class EvernoteOAuth {
     if (!tokens.noteStoreUrl) {
       try {
         const userStore = authenticatedClient.getUserStore();
-        const noteStoreUrl = await userStore.getNoteStoreUrl();
+        // The Evernote JS SDK (evernote@2.0.5) has no getNoteStoreUrl(); use
+        // getUserUrls(), and fall back to deriving from webApiUrlPrefix.
+        const userUrls = await userStore.getUserUrls();
+        const noteStoreUrl = userUrls?.noteStoreUrl
+          || (tokens.webApiUrlPrefix
+            ? tokens.webApiUrlPrefix.replace(/\/$/, '') + '/notestore'
+            : undefined);
+        if (!noteStoreUrl) {
+          throw new Error('UserStore returned no noteStoreUrl');
+        }
         tokens.noteStoreUrl = noteStoreUrl;
         if (!process.env.EVERNOTE_ACCESS_TOKEN && !(this.isClaudeCode && process.env.OAUTH_TOKEN)) {
           await fs.writeFile(this.tokenFile, JSON.stringify(tokens, null, 2));
