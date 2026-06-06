@@ -154,8 +154,10 @@ printing the token for env-var migration.
 
 ## Environment Variables
 
-All reads are direct `process.env` lookups (no dotenv-free config layer);
-defaults shown are the literal fallbacks in code.
+Values are loaded from `.env` into `process.env` via `dotenv` (`config()` is
+called at `src/index.ts:23`, and again in `src/auth-standalone.ts:12`), then
+read with direct `process.env` lookups. Defaults shown are the literal
+fallbacks in code.
 
 | Variable | Default | Read at | Purpose |
 |---|---|---|---|
@@ -236,8 +238,8 @@ chore: bump @modelcontextprotocol/sdk
 ## Testing
 
 - After behavioral changes, run `npm test` and fix failures before stopping.
-- Iterate with narrower runs (`npm run test:unit`, `test:integration`,
-  `test:e2e`) but ensure the full suite is green before declaring success.
+- Iterate with narrower runs (`npm run test:unit`, `npm run test:integration`,
+  `npm run test:e2e`) but ensure the full suite is green before declaring success.
 - Sandbox testing: set `EVERNOTE_ENVIRONMENT=sandbox` (requires a separate
   account at sandbox.evernote.com). For CI, prefer `EVERNOTE_ACCESS_TOKEN`;
   `.evernote-token.json` is a local fallback only.
