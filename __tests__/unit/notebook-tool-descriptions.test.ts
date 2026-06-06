@@ -95,6 +95,9 @@ describe('notebook-aware tool descriptions', () => {
     expect(createNotebookDescription).toContain(
       'Default: "Personal".',
     );
+    expect(createNotebookDescription).toContain(
+      'if creation fails, the note will use the default notebook.',
+    );
     expect(updateNotebookDescription).toBe(createNotebookDescription);
     expect((searchTool.inputSchema as any).properties).not.toHaveProperty('notebookName');
   });

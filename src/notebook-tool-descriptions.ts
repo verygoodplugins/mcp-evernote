@@ -42,7 +42,8 @@ export function enrichToolsWithNotebookDescriptions(
   const defaultNote = defaultNotebook ? ` Default: ${JSON.stringify(defaultNotebook.name)}.` : '';
   const notebookDescription =
     `Name of the notebook.${defaultNote} Available notebooks: ${notebookNames}. ` +
-    `If a name that doesn't exist is provided, a new notebook will be auto-created.`;
+    `If a name that doesn't exist is provided, a new notebook will be auto-created; ` +
+    `if creation fails, the note will use the default notebook.`;
 
   return tools.map(tool => {
     if (tool.name !== 'evernote_create_note' && tool.name !== 'evernote_update_note') {
