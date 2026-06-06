@@ -3,13 +3,13 @@ import { z } from 'zod';
 export const CreateNoteSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   content: z.string(),
-  notebookName: z.string().optional(),
+  notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
   tags: z.array(z.string()).optional(),
 });
 
 export const SearchNotesSchema = z.object({
   query: z.string().min(1, 'Query is required'),
-  notebookName: z.string().optional(),
+  notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
   maxResults: z.number().min(1).max(100).optional().default(20),
   includePreview: z.boolean().optional().default(false),
 });
@@ -23,7 +23,7 @@ export const UpdateNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   title: z.string().optional(),
   content: z.string().optional(),
-  notebookName: z.string().optional(),
+  notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
   tags: z.array(z.string()).optional(),
   forceUpdate: z.boolean().optional().default(false),
   forceUpdateConfirmation: z.string().optional(),

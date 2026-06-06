@@ -10,9 +10,13 @@ import { config } from 'dotenv';
 import { ZodError } from 'zod';
 import { EvernoteOAuth } from './oauth.js';
 import { EvernoteAPI } from './evernote-api.js';
-import { EvernoteConfig } from './types.js';
+import { EvernoteConfig, NotebookInfo } from './types.js';
 import { validateToolArgs } from './tool-schemas.js';
 import { computeWebhookSignature } from './webhook.js';
+import {
+  enrichToolsWithNotebookDescriptions,
+  resolveNotebookCacheForToolDescriptions,
+} from './notebook-tool-descriptions.js';
 import {
   PollingChange,
   buildWebhookPayload,
@@ -73,15 +77,27 @@ const evernoteConfig: EvernoteConfig = {
 const oauth = new EvernoteOAuth(evernoteConfig);
 let api: EvernoteAPI | null = null;
 
-// Notebook cache — populated after first successful API init
-let notebookCache: import('./types.js').NotebookInfo[] | null = null;
+// Notebook cache - populated after first successful API init
+let notebookCache: NotebookInfo[] | null = null;
 
-async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<void> {
+async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
     console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
+    return notebookCache;
   } catch (error: any) {
     console.error(`Failed to refresh notebook cache: ${error.message}`);
+    return notebookCache;
+  }
+}
+
+async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
+  try {
+    return await ensureAPI();
+  } catch (error) {
+    apiInitError = null;
+    lastInitAttempt = 0;
+    throw error;
   }
 }
 
@@ -768,43 +784,15 @@ const tools: Tool[] = [
 
 // List tools handler — injects live notebook names into descriptions when available
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  // Populate cache on first ListTools call if API is already initialized
-  if (!notebookCache && api) {
-    await refreshNotebookCache(api);
-  }
+  notebookCache = await resolveNotebookCacheForToolDescriptions({
+    currentCache: notebookCache,
+    currentApi: api,
+    ensureAPI: ensureAPIForToolDescriptions,
+    refreshNotebookCache,
+    logError: message => console.error(message),
+  });
 
-  if (notebookCache && notebookCache.length > 0) {
-    const notebookNames = notebookCache.map(nb => `"${nb.name}"`).join(', ');
-    const defaultNb = notebookCache.find(nb => nb.defaultNotebook);
-    const defaultNote = defaultNb ? ` Default: "${defaultNb.name}".` : '';
-    const notebookDesc =
-      `Name of the notebook.${defaultNote} Available notebooks: ${notebookNames}. ` +
-      `If a name that doesn't exist is provided, a new notebook will be auto-created.`;
-
-    const enrichedTools = tools.map(tool => {
-      if (tool.name === 'evernote_create_note' || tool.name === 'evernote_update_note') {
-        const props = (tool.inputSchema as any).properties || {};
-        return {
-          ...tool,
-          inputSchema: {
-            ...tool.inputSchema,
-            properties: {
-              ...props,
-              notebookName: {
-                type: 'string',
-                description: notebookDesc,
-              },
-            },
-          },
-        };
-      }
-      return tool;
-    });
-
-    return { tools: enrichedTools };
-  }
-
-  return { tools };
+  return { tools: enrichToolsWithNotebookDescriptions(tools, notebookCache) };
 });
 
 // Call tool handler
