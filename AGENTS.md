@@ -155,7 +155,7 @@ printing the token for env-var migration.
 ## Environment Variables
 
 Values are loaded from `.env` into `process.env` via `dotenv` (`config()` is
-called at `src/index.ts:23`, and again in `src/auth-standalone.ts:12`), then
+called at `src/index.ts:23`, and again in `src/auth-standalone.ts:17`), then
 read with direct `process.env` lookups. Defaults shown are the literal
 fallbacks in code.
 
