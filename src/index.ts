@@ -10,9 +10,13 @@ import { config } from 'dotenv';
 import { ZodError } from 'zod';
 import { EvernoteOAuth } from './oauth.js';
 import { EvernoteAPI } from './evernote-api.js';
-import { EvernoteConfig } from './types.js';
+import { EvernoteConfig, NotebookInfo } from './types.js';
 import { validateToolArgs } from './tool-schemas.js';
 import { computeWebhookSignature } from './webhook.js';
+import {
+  enrichToolsWithNotebookDescriptions,
+  resolveNotebookCacheForToolDescriptions,
+} from './notebook-tool-descriptions.js';
 import {
   PollingChange,
   buildWebhookPayload,
@@ -20,7 +24,7 @@ import {
 } from './polling.js';
 
 // Load environment variables
-config();
+config({ quiet: true });
 
 // Validate required environment variables with clear instructions
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
@@ -73,6 +77,57 @@ const evernoteConfig: EvernoteConfig = {
 const oauth = new EvernoteOAuth(evernoteConfig);
 let api: EvernoteAPI | null = null;
 
+// Notebook cache - populated after first successful API init
+let notebookCache: NotebookInfo[] | null = null;
+let lastToolDescriptionInitFailure = 0;
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  try {
+    return JSON.stringify(error) || String(error);
+  } catch {
+    return String(error);
+  }
+}
+
+async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
+  try {
+    notebookCache = await evernoteApi.listNotebooks();
+    console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
+    return notebookCache;
+  } catch (error) {
+    console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
+    return notebookCache;
+  }
+}
+
+async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
+  const now = Date.now();
+  const timeSinceLastAttempt = now - lastToolDescriptionInitFailure;
+  if (lastToolDescriptionInitFailure > 0 && timeSinceLastAttempt < INIT_RETRY_DELAY) {
+    throw new Error(
+      `Skipping notebook cache load after recent init failure; retry in ` +
+        `${Math.ceil((INIT_RETRY_DELAY - timeSinceLastAttempt) / 1000)}s.`,
+    );
+  }
+
+  try {
+    const initializedApi = await ensureAPI();
+    lastToolDescriptionInitFailure = 0;
+    return initializedApi;
+  } catch (error) {
+    apiInitError = null;
+    lastInitAttempt = 0;
+    lastToolDescriptionInitFailure = now;
+    throw error;
+  }
+}
+
 // Initialize API on first use
 let apiInitError: string | null = null;
 let lastInitAttempt: number = 0;
@@ -109,6 +164,8 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     api = new EvernoteAPI(client, tokens);
     apiInitError = null;
     console.error('API initialized successfully');
+    // Seed notebook cache in the background so descriptions are ready for ListTools
+    refreshNotebookCache(api).catch(() => {});
     return api;
   } catch (error: any) {
     apiInitError = error.message || 'Failed to initialize Evernote API';
@@ -403,6 +460,10 @@ const tools: Tool[] = [
         content: {
           type: 'string',
           description: 'New content (optional, Markdown supported)',
+        },
+        notebookName: {
+          type: 'string',
+          description: 'Move note to this notebook (optional)',
         },
         tags: {
           type: 'array',
@@ -748,11 +809,17 @@ const tools: Tool[] = [
   },
 ];
 
-// List tools handler
+// List tools handler — injects live notebook names into descriptions when available
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: tools,
-  };
+  notebookCache = await resolveNotebookCacheForToolDescriptions({
+    currentCache: notebookCache,
+    currentApi: api,
+    ensureAPI: ensureAPIForToolDescriptions,
+    refreshNotebookCache,
+    logError: message => console.error(message),
+  });
+
+  return { tools: enrichToolsWithNotebookDescriptions(tools, notebookCache) };
 });
 
 // Call tool handler
@@ -906,16 +973,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'evernote_create_note': {
         const { title, content, notebookName, tags } = validatedArgs;
-        
-        // Find notebook GUID if name provided
+
         let notebookGuid: string | undefined;
+        let notebookWarning: string | undefined;
+
         if (notebookName) {
           const notebooks = await evernoteApi.listNotebooks();
+          notebookCache = notebooks;
           const notebook = notebooks.find(nb => nb.name === notebookName);
           if (notebook) {
             notebookGuid = notebook.guid;
           } else {
-            throw new Error(`Notebook '${notebookName}' not found`);
+            // Notebook doesn't exist — auto-create it
+            try {
+              const newNotebook = await evernoteApi.createNotebook(notebookName);
+              notebookGuid = newNotebook.guid;
+              notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
+              notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+            } catch (createError) {
+              // Auto-create failed — fall back to the default notebook
+              const defaultNb = notebooks.find(nb => nb.defaultNotebook);
+              notebookGuid = defaultNb?.guid;
+              const fallbackName = defaultNb?.name || 'the default notebook';
+              notebookWarning =
+                `Notebook "${notebookName}" does not exist and could not be auto-created ` +
+                `(${errorMessage(createError)}). Note was placed in "${fallbackName}" instead.`;
+            }
           }
         }
 
@@ -926,11 +1009,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           tagNames: tags,
         });
 
+        const resultText = `Note created successfully!\nGUID: ${note.guid}\nTitle: ${note.title}`;
         return {
           content: [
             {
               type: 'text',
-              text: `Note created successfully!\nGUID: ${note.guid}\nTitle: ${note.title}`,
+              text: notebookWarning ? `${resultText}\n\n⚠️ ${notebookWarning}` : resultText,
             },
           ],
         };
@@ -1050,10 +1134,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_update_note': {
-        const { guid, title, content, tags, forceUpdate = false } = validatedArgs;
-        
+        const { guid, title, content, notebookName, tags, forceUpdate = false } = validatedArgs;
+
         console.error(`Updating note ${guid}`);
-        
+
+        let forceUpdateNotebookGuid: string | undefined;
+
         try {
           // Get existing note
           const note = await evernoteApi.getNote(guid, true, true);
@@ -1071,13 +1157,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             note.tagNames = tags;
           }
 
+          let notebookWarning: string | undefined;
+          if (notebookName !== undefined) {
+            const notebooks = await evernoteApi.listNotebooks();
+            notebookCache = notebooks;
+            const notebook = notebooks.find(nb => nb.name === notebookName);
+            if (notebook) {
+              note.notebookGuid = notebook.guid;
+            } else {
+              // Auto-create the notebook
+              try {
+                const newNotebook = await evernoteApi.createNotebook(notebookName);
+                note.notebookGuid = newNotebook.guid;
+                notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
+                notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+              } catch (createError) {
+                const defaultNb = notebooks.find(nb => nb.defaultNotebook);
+                note.notebookGuid = defaultNb?.guid;
+                const fallbackName = defaultNb?.name || 'the default notebook';
+                notebookWarning =
+                  `Notebook "${notebookName}" does not exist and could not be auto-created ` +
+                  `(${errorMessage(createError)}). Note was moved to "${fallbackName}" instead.`;
+              }
+            }
+            forceUpdateNotebookGuid = note.notebookGuid;
+          }
+
           const updatedNote = await evernoteApi.updateNote(note);
 
+          const resultText = `✅ Note updated successfully!\nGUID: ${updatedNote.guid}\nTitle: ${updatedNote.title}`;
           return {
             content: [
               {
                 type: 'text',
-                text: `✅ Note updated successfully!\nGUID: ${updatedNote.guid}\nTitle: ${updatedNote.title}`,
+                text: notebookWarning ? `${resultText}\n\n⚠️ ${notebookWarning}` : resultText,
               },
             ],
           };
@@ -1095,7 +1208,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const newNote = await evernoteApi.createNote({
                 title: title || originalNote.title,
                 content: content || evernoteApi.convertENMLToMarkdown(originalNote.content, originalNote.resources),
-                notebookGuid: originalNote.notebookGuid,
+                notebookGuid: forceUpdateNotebookGuid || originalNote.notebookGuid,
                 tagNames: tags || originalNote.tagNames,
               });
               
@@ -1114,9 +1227,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   },
                 ],
               };
-            } catch (forceError: any) {
-              console.error(`Force update also failed: ${forceError.message}`);
-              stepError.message += `\n\nForce update also failed: ${forceError.message}`;
+            } catch (forceError) {
+              const forceErrorMessage = errorMessage(forceError);
+              console.error(`Force update also failed: ${forceErrorMessage}`);
+              stepError.message += `\n\nForce update also failed: ${forceErrorMessage}`;
             }
           }
           

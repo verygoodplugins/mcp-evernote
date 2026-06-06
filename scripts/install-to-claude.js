@@ -12,7 +12,7 @@ import { detectEnvironment, getRecommendedSetup } from './detect-environment.js'
 import { config } from 'dotenv';
 
 // Load environment variables
-config();
+config({ quiet: true });
 
 const rl = readline.createInterface({
   input: process.stdin,
