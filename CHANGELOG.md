@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.3...mcp-evernote-v1.2.4) (2026-06-06)
+
+
+### Bug Fixes
+
+* **polling:** use filtered Evernote sync chunks ([#37](https://github.com/verygoodplugins/mcp-evernote/issues/37)) ([46c4ec7](https://github.com/verygoodplugins/mcp-evernote/commit/46c4ec7511559629cb4070cf6e68ae81d1c3664e))
+* resolve noteStoreUrl via getUserUrls() instead of non-existent getNoteStoreUrl() ([#42](https://github.com/verygoodplugins/mcp-evernote/issues/42)) ([c696ecb](https://github.com/verygoodplugins/mcp-evernote/commit/c696ecbaae6dc4cd46e4b45468602cbd0a492d31))
+
 ## [1.2.3](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.2...mcp-evernote-v1.2.3) (2026-01-21)
 
 
