@@ -5,6 +5,10 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with Evernote for note management, organization, and knowledge capture. Works with both Claude Code and Claude Desktop.
 
+## No Evernote API Key?
+
+> **Evernote stopped issuing new developer API keys.** If you are a new user and cannot obtain a Consumer Key/Secret, skip the standard OAuth setup and use the [cookie-based authentication method](#cookie-based-authentication-no-api-key-needed) instead — no API key required.
+
 ## Installation Requirements
 
 ### For Claude Desktop Users:
@@ -146,73 +150,14 @@ npm install
 npm run setup
 ```
 
----
-
-## ⚠️ No API Key? Use Browser Cookie Auth
-
-> **Evernote stopped issuing new developer API keys.** If you're a new user, you cannot obtain Consumer Key/Secret through normal channels. Use the browser cookie method below instead — no API key needed.
->
-> *Discovery credit: community member @tdrayson. Tracked in [issue #49](https://github.com/verygoodplugins/mcp-evernote/issues/49).*
-
-The `clipper-sso` cookie set by the Evernote web UI is identical in format to a developer-issued access token and can be used directly as `EVERNOTE_ACCESS_TOKEN`.
-
-**Cookie format:**
-```
-S=s101:U=XXX:XXXXX:C=XXXX:P=XXX:A=en-chrome-clipper-xauth-new:V=2:H=XXXXX
-```
-
-### Step 1 — Extract the cookie from your browser
-
-1. Open [www.evernote.com](https://www.evernote.com) and log in
-2. Open DevTools: `F12` (Windows/Linux) or `Cmd+Option+I` (macOS)
-3. Go to **Application** → **Cookies** → **www.evernote.com**
-4. Find the `clipper-sso` cookie and copy its **Value**
-
-### Step 2 — Configure your MCP client
-
-**Claude Code:**
-```bash
-claude mcp add evernote -s user \
-    -e "EVERNOTE_ACCESS_TOKEN=S=s101:U=XXX:..." \
-    "npx -y -p @verygoodplugins/mcp-evernote mcp-evernote"
-```
-
-**Claude Desktop** (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "evernote": {
-      "command": "npx",
-      "args": ["-y", "-p", "@verygoodplugins/mcp-evernote", "-c", "mcp-evernote"],
-      "env": {
-        "EVERNOTE_ACCESS_TOKEN": "S=s101:U=XXX:..."
-      }
-    }
-  }
-}
-```
-
-Replace `S=s101:U=XXX:...` with your actual `clipper-sso` cookie value.
-
-### Caveats
-
-- **`EVERNOTE_NOTESTORE_URL` is not required.** The server fetches it automatically on startup using your token.
-- **Token expiry:** The `clipper-sso` cookie expires periodically (typically every few weeks to a few months). When tools start returning auth errors, repeat the extraction steps above and update your `EVERNOTE_ACCESS_TOKEN`.
-- **Environment:** This token is always production — sandbox mode is not available through this path.
-- **Security:** Treat this token like a password. Do not commit it to version control.
-
----
-
 ## Configuration
 
 ### 1. Get Evernote API Credentials
 
-> **Note:** Evernote has stopped issuing new developer API keys. If you need to set up this integration fresh, use the [Browser Cookie Auth](#%EF%B8%8F-no-api-key-use-browser-cookie-auth) method above instead.
-
-For existing developers with credentials:
+> **Note:** Evernote has stopped issuing new developer API keys to new applicants. If you are a new user, skip this section and use the [cookie-based authentication method](#cookie-based-authentication-no-api-key-needed) instead.
 
 1. Visit [Evernote Developers](https://dev.evernote.com/)
-2. Log in and navigate to your existing application
+2. Create a new application
 3. Copy your Consumer Key and Consumer Secret
 
 ### 2. Authentication Options
@@ -326,34 +271,76 @@ mcp-evernote-auth
 
 </details>
 
-## Authentication Methods
+## Cookie-Based Authentication (No API Key Needed)
 
-### 1. Browser Cookie — Recommended for New Users
+Since Evernote stopped issuing developer API keys to new applicants, new users can authenticate using the `clipper-sso` browser cookie from the Evernote web UI. This cookie carries the same format as a developer-issued access token and works directly as `EVERNOTE_ACCESS_TOKEN` — no Consumer Key or Consumer Secret required.
 
-Evernote stopped issuing API keys to new developers. Extract the `clipper-sso` cookie from the Evernote web UI and use it as `EVERNOTE_ACCESS_TOKEN` directly. See [⚠️ No API Key? Use Browser Cookie Auth](#%EF%B8%8F-no-api-key-use-browser-cookie-auth) for full instructions.
+**Credit:** Discovered by community member @tdrayson. ([Issue #49](https://github.com/verygoodplugins/mcp-evernote/issues/49))
 
-```env
-EVERNOTE_ACCESS_TOKEN=S=s101:U=XXX:...   # your clipper-sso cookie value
+### Step 1: Extract the Cookie
+
+1. Log in to [www.evernote.com](https://www.evernote.com) in your browser
+2. Open DevTools: **F12** (Windows/Linux) or **Cmd+Option+I** (Mac)
+3. Navigate to the **Application** tab → **Cookies** → `www.evernote.com`
+4. Find the cookie named **`clipper-sso`**
+5. Copy its **Value** — it looks like:
+   ```
+   S=s101:U=XXX:XXXXX:C=XXXX:P=XXX:A=en-chrome-clipper-xauth-new:V=2:H=XXXXX
+   ```
+
+### Step 2: Configure Your Client
+
+**Claude Code:**
+```bash
+claude mcp add evernote -s user \
+    -e "EVERNOTE_ACCESS_TOKEN=S=s101:U=XXX:..." \
+    "npx -y -p @verygoodplugins/mcp-evernote mcp-evernote"
 ```
 
-### 2. Claude Code (Automatic OAuth)
-Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code. Requires existing developer API credentials (Consumer Key/Secret).
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+```json
+{
+  "mcpServers": {
+    "evernote": {
+      "command": "npx",
+      "args": ["-y", "-p", "@verygoodplugins/mcp-evernote", "-c", "mcp-evernote"],
+      "env": {
+        "EVERNOTE_ACCESS_TOKEN": "S=s101:U=XXX:..."
+      }
+    }
+  }
+}
+```
 
-### 3. Claude Desktop (Manual OAuth)
-Run `npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. The script saves `.evernote-token.json` for compatibility and also prints a token you can set as `EVERNOTE_ACCESS_TOKEN`. Requires existing developer API credentials.
+> **Note:** `EVERNOTE_NOTESTORE_URL` is **not required** when using the cookie token — the server resolves it automatically on first connection.
 
-### 4. Environment Variables (CI/CD)
+### Caveats
+
+- **Token expiry**: The `clipper-sso` token typically expires after roughly one year, or when you explicitly log out of Evernote in your browser. When it expires, log back in to [www.evernote.com](https://www.evernote.com), re-extract the cookie, and update `EVERNOTE_ACCESS_TOKEN`.
+- **Browser session**: The cookie is tied to your browser login session. Logging out of the Evernote web app will invalidate the token.
+- **Production only**: This uses your live Evernote account. There is no sandbox equivalent for this method.
+
+## Authentication Methods
+
+### 1. Claude Code (Automatic)
+Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code.
+
+### 2. Claude Desktop (Manual)
+Run `npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-auth` to authenticate via browser. The script saves `.evernote-token.json` for compatibility and also prints a token you can set as `EVERNOTE_ACCESS_TOKEN`.
+
+### 3. Environment Variables (CI/CD)
 ```env
 EVERNOTE_ACCESS_TOKEN=your-token
-EVERNOTE_NOTESTORE_URL=your-notestore-url   # optional: fetched automatically if omitted
+EVERNOTE_NOTESTORE_URL=your-notestore-url
 EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 ```
 
-### 5. Direct Token (Advanced)
+### 4. Direct Token (Advanced)
 ```json
 {
   "env": {
-    "EVERNOTE_ACCESS_TOKEN": "your-access-token"
+    "EVERNOTE_ACCESS_TOKEN": "your-access-token",
+    "EVERNOTE_NOTESTORE_URL": "your-notestore-url"
   }
 }
 ```
