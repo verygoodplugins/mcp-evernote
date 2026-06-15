@@ -312,7 +312,7 @@ claude mcp add evernote -s user \
 }
 ```
 
-> **Note:** `EVERNOTE_NOTESTORE_URL` is **not required** when using the cookie token — the server resolves it automatically on first connection.
+> **Note:** `EVERNOTE_NOTESTORE_URL` is **not required** when using the cookie token — the server fetches it automatically at startup.
 
 ### Caveats
 
