@@ -323,6 +323,8 @@ claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote -c mcp-evernote
 
 ## Authentication Methods
 
+**Recommended for new users:** [Cookie-Based Authentication (No API Key Needed)](#cookie-based-authentication-no-api-key-needed).
+
 ### 1. Claude Code (Automatic)
 Claude Code handles OAuth automatically via the `/mcp` command. Tokens are managed by Claude Code.
 
