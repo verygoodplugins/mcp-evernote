@@ -5,7 +5,7 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with Evernote for note management, organization, and knowledge capture. Works with both Claude Code and Claude Desktop.
 
-## No Evernote API Key?
+## ⚠️ No API Key? Use Browser Cookie Auth
 
 > **Evernote stopped issuing new developer API keys.** If you are a new user and cannot obtain a Consumer Key/Secret, skip the standard OAuth setup and use the [cookie-based authentication method](#cookie-based-authentication-no-api-key-needed) instead — no API key required.
 
