@@ -292,9 +292,8 @@ Since Evernote stopped issuing developer API keys to new applicants, new users c
 
 **Claude Code:**
 ```bash
-claude mcp add evernote -s user \
-    -e "EVERNOTE_ACCESS_TOKEN=S=s101:U=XXX:..." \
-    "npx -y -p @verygoodplugins/mcp-evernote mcp-evernote"
+claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote -c mcp-evernote" \
+  --env EVERNOTE_ACCESS_TOKEN="S=s101:U=XXX:..."
 ```
 
 **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
