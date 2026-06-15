@@ -4,6 +4,7 @@
 import {
   CreateNoteSchema,
   SearchNotesSchema,
+  UpdateNoteSchema,
   DeleteNoteSchema,
   PatchNoteSchema,
   GetNotebookSchema,
@@ -58,6 +59,14 @@ describe('tool schemas (M1)', () => {
     it('defaults includePreview to false', () => {
       const result = SearchNotesSchema.parse({ query: 'test' });
       expect(result.includePreview).toBe(false);
+    });
+  });
+
+  describe('UpdateNoteSchema', () => {
+    it('rejects empty notebookName', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({ guid: 'abc-123', notebookName: '' }),
+      ).toThrow(/Notebook name cannot be empty/);
     });
   });
 
