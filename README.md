@@ -275,6 +275,8 @@ mcp-evernote-auth
 
 Since Evernote stopped issuing developer API keys to new applicants, new users can authenticate using the `clipper-sso` browser cookie from the Evernote web UI. This cookie carries the same format as a developer-issued access token and works directly as `EVERNOTE_ACCESS_TOKEN` — no Consumer Key or Consumer Secret required.
 
+> **Security warning:** Treat this value like a password. Anyone with it can access your Evernote account. Never commit it to git, paste it into chat logs, or share it publicly.
+
 **Credit:** Discovered by community member @tdrayson. ([Issue #49](https://github.com/verygoodplugins/mcp-evernote/issues/49))
 
 ### Step 1: Extract the Cookie
