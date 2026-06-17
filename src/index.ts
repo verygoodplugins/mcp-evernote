@@ -1125,7 +1125,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'evernote_get_note': {
         const { guid, includeContent = true, includePdfContent = true } = validatedArgs;
-        const note = await evernoteApi.getNote(guid, includeContent, includeContent);
+        // Fetch resources whenever PDF text/resource metadata is wanted, independent of includeContent.
+        const note = await evernoteApi.getNote(guid, includeContent, includePdfContent);
 
         const result: any = {
           guid: note.guid,
@@ -1142,24 +1143,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           result.tags = note.tagNames;
         }
 
-        // Include resource metadata; extract PDF text for PDF attachments
+        // Include resource metadata; extract PDF text for PDF attachments.
+        // Processed sequentially so a note with many attachments can't fan out
+        // into unbounded concurrent binary downloads (rate-limit / memory pressure).
         if (note.resources && note.resources.length > 0) {
-          result.resources = await Promise.all(
-            note.resources.map(async (r: any) => {
-              const resourceInfo: any = {
-                guid: r.guid,
-                filename: r.attributes?.fileName,
-                mimeType: r.mime,
-                size: r.data?.size || 0,
-              };
+          const resources: any[] = [];
+          for (const r of note.resources) {
+            const resourceInfo: any = {
+              guid: r.guid,
+              filename: r.attributes?.fileName,
+              mimeType: r.mime,
+              size: r.data?.size || 0,
+            };
 
-              if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
-                resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid);
-              }
+            if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
+              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid);
+            }
 
-              return resourceInfo;
-            })
-          );
+            resources.push(resourceInfo);
+          }
+          result.resources = resources;
         }
 
         return {

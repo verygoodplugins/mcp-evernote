@@ -16,7 +16,11 @@ const FALLBACK_TEXT =
 export async function extractPdfText(data: Buffer): Promise<string> {
   try {
     const { PDFParse } = await import('pdf-parse');
-    const parser = new PDFParse({ data: new Uint8Array(data) });
+    // Zero-copy view over the existing Buffer (which is already a Uint8Array),
+    // respecting byteOffset/byteLength so pooled Buffers aren't over-read.
+    const parser = new PDFParse({
+      data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+    });
     const result = await parser.getText();
     const text = result.text?.trim();
     if (!text) {

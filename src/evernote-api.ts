@@ -401,7 +401,9 @@ export class EvernoteAPI {
         : Buffer.from(resource.data.body);
       return await extractPdfText(buffer);
     } catch {
-      return '[PDF text extraction failed — may be a scanned/image-only document]';
+      // Covers resource fetch / API / network failures. Parse failures (incl.
+      // scanned/image-only PDFs) are handled inside extractPdfText.
+      return '[PDF text extraction failed — could not retrieve the attachment]';
     }
   }
 
