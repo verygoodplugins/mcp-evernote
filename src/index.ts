@@ -441,7 +441,9 @@ const tools: Tool[] = [
         },
         includePdfContent: {
           type: 'boolean',
-          description: 'Extract and include text from PDF attachments (default: true)',
+          description:
+            'Extract and include text from PDF attachments (default: true). When false, ' +
+            'attachment resources are not fetched, so resource metadata is omitted from the response too.',
           default: true,
         },
       },
