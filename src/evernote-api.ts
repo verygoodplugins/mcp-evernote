@@ -22,6 +22,7 @@ import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import * as cheerio from 'cheerio';
 import { validateLocalFilePath } from './path-security.js';
+import { extractPdfText } from './pdf-extract.js';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -381,6 +382,27 @@ export class EvernoteAPI {
   async getResourceRecognition(guid: string): Promise<RecognitionData> {
     const recognitionData = await this.noteStore.getResourceRecognition(guid);
     return this.parseRecognitionXml(guid, recognitionData);
+  }
+
+  /**
+   * Fetch PDF resource binary data and extract its text content.
+   *
+   * Falls back to a human-readable message if the resource has no text layer
+   * (e.g. scanned / image-only PDFs) or if the API call fails.
+   */
+  async extractPdfTextFromResource(resourceGuid: string): Promise<string> {
+    try {
+      const resource = await this.getResource(resourceGuid, true);
+      if (!resource?.data?.body) {
+        return '[PDF text extraction failed — no data available]';
+      }
+      const buffer = Buffer.isBuffer(resource.data.body)
+        ? resource.data.body
+        : Buffer.from(resource.data.body);
+      return await extractPdfText(buffer);
+    } catch {
+      return '[PDF text extraction failed — may be a scanned/image-only document]';
+    }
   }
 
   async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {
