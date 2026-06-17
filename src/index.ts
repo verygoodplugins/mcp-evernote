@@ -426,7 +426,7 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_get_note',
-    description: 'Get a specific note by its GUID. PDF attachments have their text extracted and included automatically.',
+    description: 'Get a specific note by its GUID. PDF attachment text is extracted and included by default; set includePdfContent: false to skip it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1157,7 +1157,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
 
             if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
-              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid);
+              // Reuse the resource body already fetched with the note (no second download).
+              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid, r);
             }
 
             resources.push(resourceInfo);

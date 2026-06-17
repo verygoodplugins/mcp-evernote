@@ -387,12 +387,19 @@ export class EvernoteAPI {
   /**
    * Fetch PDF resource binary data and extract its text content.
    *
-   * Falls back to a human-readable message if the resource has no text layer
-   * (e.g. scanned / image-only PDFs) or if the API call fails.
+   * Pass `prefetched` (a resource already returned by getNote with inline data)
+   * to reuse its body instead of downloading the binary a second time.
+   *
+   * Falls back to a human-readable message if the resource is not a PDF, has no
+   * text layer (e.g. scanned / image-only PDFs), or if the API call fails.
    */
-  async extractPdfTextFromResource(resourceGuid: string): Promise<string> {
+  async extractPdfTextFromResource(resourceGuid: string, prefetched?: any): Promise<string> {
     try {
-      const resource = await this.getResource(resourceGuid, true);
+      const resource =
+        prefetched?.data?.body != null ? prefetched : await this.getResource(resourceGuid, true);
+      if (resource?.mime && resource.mime !== 'application/pdf') {
+        return `[Not a PDF resource (mime: ${resource.mime}) — text extraction only supports PDF attachments]`;
+      }
       if (!resource?.data?.body) {
         return '[PDF text extraction failed — no data available]';
       }
