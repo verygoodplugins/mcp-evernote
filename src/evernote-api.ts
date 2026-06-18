@@ -22,6 +22,7 @@ import { readFile } from 'fs/promises';
 import { basename, extname } from 'path';
 import * as cheerio from 'cheerio';
 import { validateLocalFilePath } from './path-security.js';
+import { extractPdfText } from './pdf-extract.js';
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -381,6 +382,36 @@ export class EvernoteAPI {
   async getResourceRecognition(guid: string): Promise<RecognitionData> {
     const recognitionData = await this.noteStore.getResourceRecognition(guid);
     return this.parseRecognitionXml(guid, recognitionData);
+  }
+
+  /**
+   * Fetch PDF resource binary data and extract its text content.
+   *
+   * Pass `prefetched` (a resource already returned by getNote with inline data)
+   * to reuse its body instead of downloading the binary a second time.
+   *
+   * Falls back to a human-readable message if the resource is not a PDF, has no
+   * text layer (e.g. scanned / image-only PDFs), or if the API call fails.
+   */
+  async extractPdfTextFromResource(resourceGuid: string, prefetched?: any): Promise<string> {
+    try {
+      const resource =
+        prefetched?.data?.body != null ? prefetched : await this.getResource(resourceGuid, true);
+      if (resource?.mime && resource.mime !== 'application/pdf') {
+        return `[Not a PDF resource (mime: ${resource.mime}) — text extraction only supports PDF attachments]`;
+      }
+      if (!resource?.data?.body) {
+        return '[PDF text extraction failed — no data available]';
+      }
+      const buffer = Buffer.isBuffer(resource.data.body)
+        ? resource.data.body
+        : Buffer.from(resource.data.body);
+      return await extractPdfText(buffer);
+    } catch {
+      // Covers resource fetch / API / network failures. Parse failures (incl.
+      // scanned/image-only PDFs) are handled inside extractPdfText.
+      return '[PDF text extraction failed — could not retrieve the attachment]';
+    }
   }
 
   async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {

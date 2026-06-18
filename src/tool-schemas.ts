@@ -17,6 +17,11 @@ export const SearchNotesSchema = z.object({
 export const GetNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   includeContent: z.boolean().optional().default(true),
+  includePdfContent: z.boolean().optional().default(true),
+});
+
+export const GetResourceTextSchema = z.object({
+  resourceGuid: z.string().min(1, 'Resource GUID is required'),
 });
 
 export const UpdateNoteSchema = z.object({
@@ -126,6 +131,7 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_update_tag: UpdateTagSchema,
   evernote_patch_note: PatchNoteSchema,
   evernote_health_check: HealthCheckSchema,
+  evernote_get_resource_text: GetResourceTextSchema,
 };
 
 /**

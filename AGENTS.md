@@ -47,7 +47,7 @@ npm run test:e2e          # __tests__/e2e
 npm run test:coverage     # with coverage
 ```
 
-All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=18.18.0` is required (`package.json` `engines`).
+All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=20.16.0` is required (`package.json` `engines`) — the `pdf-parse` dependency (and its `pdfjs-dist` transitive) require Node 20.16+.
 
 ## Architecture
 

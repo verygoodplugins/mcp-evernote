@@ -426,7 +426,7 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_get_note',
-    description: 'Get a specific note by its GUID',
+    description: 'Get a specific note by its GUID. PDF attachment text is extracted and included by default; set includePdfContent: false to skip it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -437,6 +437,13 @@ const tools: Tool[] = [
         includeContent: {
           type: 'boolean',
           description: 'Include note content (default: true)',
+          default: true,
+        },
+        includePdfContent: {
+          type: 'boolean',
+          description:
+            'Extract and include text from PDF attachments (default: true). When false, ' +
+            'attachment resources are not fetched, so resource metadata is omitted from the response too.',
           default: true,
         },
       },
@@ -684,6 +691,20 @@ const tools: Tool[] = [
         resourceGuid: {
           type: 'string',
           description: 'Resource GUID',
+        },
+      },
+      required: ['resourceGuid'],
+    },
+  },
+  {
+    name: 'evernote_get_resource_text',
+    description: 'Extract plain text from a PDF resource attachment. Returns the text content, or an explanatory message if extraction failed (e.g. scanned/image-only PDF). Use this to read a specific PDF by its resource GUID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceGuid: {
+          type: 'string',
+          description: 'Resource GUID of the PDF attachment',
         },
       },
       required: ['resourceGuid'],
@@ -1105,9 +1126,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_note': {
-        const { guid, includeContent = true } = validatedArgs;
-        const note = await evernoteApi.getNote(guid, includeContent, includeContent);
-        
+        const { guid, includeContent = true, includePdfContent = true } = validatedArgs;
+        // Fetch resources whenever PDF text/resource metadata is wanted, independent of includeContent.
+        const note = await evernoteApi.getNote(guid, includeContent, includePdfContent);
+
         const result: any = {
           guid: note.guid,
           title: note.title,
@@ -1121,6 +1143,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (note.tagNames) {
           result.tags = note.tagNames;
+        }
+
+        // Include resource metadata; extract PDF text for PDF attachments.
+        // Processed sequentially so a note with many attachments can't fan out
+        // into unbounded concurrent binary downloads (rate-limit / memory pressure).
+        if (note.resources && note.resources.length > 0) {
+          const resources: any[] = [];
+          for (const r of note.resources) {
+            const resourceInfo: any = {
+              guid: r.guid,
+              filename: r.attributes?.fileName,
+              mimeType: r.mime,
+              size: r.data?.size || 0,
+            };
+
+            if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
+              // Reuse the resource body already fetched with the note (no second download).
+              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid, r);
+            }
+
+            resources.push(resourceInfo);
+          }
+          result.resources = resources;
         }
 
         return {
@@ -1420,6 +1465,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 null,
                 2
               ),
+            },
+          ],
+        };
+      }
+
+      case 'evernote_get_resource_text': {
+        const { resourceGuid } = validatedArgs;
+        const text = await evernoteApi.extractPdfTextFromResource(resourceGuid);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text,
             },
           ],
         };
