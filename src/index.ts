@@ -114,24 +114,24 @@ async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookI
 
 // Serve list_notebooks (and get_note's notebook lookup) from a TTL cache so we
 // don't hit the Evernote API on every call — under load that was rate-limiting
-// (errorCode 19) and returning an empty list.
+// (errorCode 19) and returning an empty list. On a COLD cache a failed refresh
+// is surfaced (not swallowed into an empty list), so rate-limit errors reach the
+// caller; a stale cache is served when one exists.
 async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInfo[]> {
   const now = Date.now();
   if (notebookCache !== null && now - notebookCacheAt < ENTITY_CACHE_TTL_MS) {
     return notebookCache;
   }
-  const refreshed = await refreshNotebookCache(evernoteApi);
-  return refreshed ?? notebookCache ?? [];
-}
-
-async function refreshTagCache(evernoteApi: EvernoteAPI): Promise<any[] | null> {
   try {
-    tagCache = await evernoteApi.listTags();
-    tagCacheAt = Date.now();
-    return tagCache;
+    notebookCache = await evernoteApi.listNotebooks();
+    notebookCacheAt = Date.now();
+    return notebookCache;
   } catch (error) {
-    console.error(`Failed to refresh tag cache: ${errorMessage(error)}`);
-    return tagCache;
+    if (notebookCache !== null) {
+      console.error(`listNotebooks failed; serving stale notebook cache: ${errorMessage(error)}`);
+      return notebookCache;
+    }
+    throw error;
   }
 }
 
@@ -141,8 +141,17 @@ async function getCachedTags(evernoteApi: EvernoteAPI): Promise<any[]> {
   if (tagCache !== null && now - tagCacheAt < ENTITY_CACHE_TTL_MS) {
     return tagCache;
   }
-  const refreshed = await refreshTagCache(evernoteApi);
-  return refreshed ?? tagCache ?? [];
+  try {
+    tagCache = await evernoteApi.listTags();
+    tagCacheAt = Date.now();
+    return tagCache;
+  } catch (error) {
+    if (tagCache !== null) {
+      console.error(`listTags failed; serving stale tag cache: ${errorMessage(error)}`);
+      return tagCache;
+    }
+    throw error;
+  }
 }
 
 async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
@@ -1367,6 +1376,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'evernote_create_notebook': {
         const { name, stack } = validatedArgs;
         const notebook = await evernoteApi.createNotebook(name, stack);
+        notebookCache = null; // new notebook exists; refresh on next read
         
         return {
           content: [
@@ -1405,6 +1415,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const tag = await evernoteApi.createTag(name, parentGuid);
+        tagCache = null; // new tag exists; refresh on next read
         
         return {
           content: [
@@ -1581,6 +1592,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updatedNotebook = await evernoteApi.updateNotebook(notebook);
+        notebookCache = null; // notebook changed; refresh on next read
 
         return {
           content: [
@@ -1644,6 +1656,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updatedTag = await evernoteApi.updateTag(tag);
+        tagCache = null; // tag changed; refresh on next read
 
         return {
           content: [
