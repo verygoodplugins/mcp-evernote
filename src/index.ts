@@ -79,6 +79,11 @@ let api: EvernoteAPI | null = null;
 
 // Notebook cache - populated after first successful API init
 let notebookCache: NotebookInfo[] | null = null;
+let notebookCacheAt = 0;
+let tagCache: any[] | null = null;
+let tagCacheAt = 0;
+// Notebooks and tags change rarely; serve repeated reads from a short TTL cache.
+const ENTITY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
@@ -98,12 +103,46 @@ function errorMessage(error: unknown): string {
 async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
+    notebookCacheAt = Date.now();
     console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
     return notebookCache;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
     return notebookCache;
   }
+}
+
+// Serve list_notebooks (and get_note's notebook lookup) from a TTL cache so we
+// don't hit the Evernote API on every call — under load that was rate-limiting
+// (errorCode 19) and returning an empty list.
+async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInfo[]> {
+  const now = Date.now();
+  if (notebookCache !== null && now - notebookCacheAt < ENTITY_CACHE_TTL_MS) {
+    return notebookCache;
+  }
+  const refreshed = await refreshNotebookCache(evernoteApi);
+  return refreshed ?? notebookCache ?? [];
+}
+
+async function refreshTagCache(evernoteApi: EvernoteAPI): Promise<any[] | null> {
+  try {
+    tagCache = await evernoteApi.listTags();
+    tagCacheAt = Date.now();
+    return tagCache;
+  } catch (error) {
+    console.error(`Failed to refresh tag cache: ${errorMessage(error)}`);
+    return tagCache;
+  }
+}
+
+// Same rationale as notebooks: tags are read on every note format/auto-tag pass.
+async function getCachedTags(evernoteApi: EvernoteAPI): Promise<any[]> {
+  const now = Date.now();
+  if (tagCache !== null && now - tagCacheAt < ENTITY_CACHE_TTL_MS) {
+    return tagCache;
+  }
+  const refreshed = await refreshTagCache(evernoteApi);
+  return refreshed ?? tagCache ?? [];
 }
 
 async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
@@ -1137,6 +1176,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           updated: new Date(note.updated).toISOString(),
         };
 
+        // Surface the containing notebook so callers don't need a separate
+        // list_notebooks round-trip just to know where a note lives.
+        if (note.notebookGuid) {
+          result.notebookGuid = note.notebookGuid;
+          try {
+            const notebooks = await getCachedNotebooks(evernoteApi);
+            const nb = notebooks.find(n => n.guid === note.notebookGuid);
+            if (nb) {
+              result.notebookName = nb.name;
+            }
+          } catch {
+            // notebookName is best-effort; never fail get_note over it.
+          }
+        }
+
         if (includeContent && note.content) {
           result.content = evernoteApi.convertENMLToMarkdown(note.content, note.resources);
         }
@@ -1298,8 +1352,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_list_notebooks': {
-        const notebooks = await evernoteApi.listNotebooks();
-        
+        const notebooks = await getCachedNotebooks(evernoteApi);
+
         return {
           content: [
             {
@@ -1325,8 +1379,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_list_tags': {
-        const tags = await evernoteApi.listTags();
-        
+        const tags = await getCachedTags(evernoteApi);
+
         return {
           content: [
             {
@@ -1832,9 +1886,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     const timestamp = new Date().toISOString();
 
-    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}`);
+    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}${error.rateLimitDuration ? ` rateLimitDuration=${error.rateLimitDuration}s` : ''}`);
 
-    // Return error information without sensitive data
+    // Return error information without sensitive data. Surface Evernote's
+    // rateLimitDuration (SECONDS) on rate-limit errors (errorCode 19) so callers
+    // can back off for the exact window instead of guessing.
     return {
       content: [
         {
@@ -1842,7 +1898,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: `Tool execution failed: ${name}\n\n` +
                 `Error: ${error.message}\n` +
                 `Timestamp: ${timestamp}` +
-                (error.errorCode ? `\nError code: ${error.errorCode}` : ''),
+                (error.errorCode ? `\nError code: ${error.errorCode}` : '') +
+                (error.rateLimitDuration ? `\nRate limit duration: ${error.rateLimitDuration}s` : ''),
         },
       ],
       isError: true,
