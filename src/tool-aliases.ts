@@ -101,6 +101,13 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
     mapArgs: (a) => ({ name: a.name, guid: a.guid }),
     sampleArgs: { name: 'important' },
   },
+
+  // Notes 6 -> 5 (PR 5): patch_note folds into update_note's patch mode.
+  evernote_patch_note: {
+    canonical: 'evernote_update_note',
+    mapArgs: (a) => ({ guid: a.guid, replacements: a.replacements }),
+    sampleArgs: { guid: 'n1', replacements: [{ find: 'a', replace: 'b' }] },
+  },
 };
 
 export interface ResolvedTool {

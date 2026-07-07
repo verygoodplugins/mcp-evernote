@@ -40,6 +40,16 @@ export const GetNoteSchema = z.object({
     (data.guids ? false : true),
 }));
 
+const NoteReplacementSchema = z.object({
+  find: z.string().min(1, 'Find string must not be empty'),
+  replace: z.string(),
+  replaceAll: z.boolean().optional().default(true),
+});
+
+// update_note has two modes: a full-field update (title/content/tags/notebook)
+// or, when `replacements` is present, a targeted find-and-replace patch that
+// leaves title/tags/notebook/attachments untouched. The two are mutually
+// exclusive.
 export const UpdateNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   title: z.string().optional(),
@@ -48,13 +58,34 @@ export const UpdateNoteSchema = z.object({
   tags: z.array(z.string()).optional(),
   forceUpdate: z.boolean().optional().default(false),
   forceUpdateConfirmation: z.string().optional(),
-}).refine(
-  data => !data.forceUpdate || data.forceUpdateConfirmation === 'I understand this will delete the original note',
-  {
-    message: 'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
-    path: ['forceUpdateConfirmation'],
-  },
-);
+  replacements: z.array(NoteReplacementSchema).min(1, 'At least one replacement is required').optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.forceUpdate &&
+    data.forceUpdateConfirmation !== 'I understand this will delete the original note'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['forceUpdateConfirmation'],
+      message:
+        'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
+    });
+  }
+  if (
+    data.replacements &&
+    (data.title !== undefined ||
+      data.content !== undefined ||
+      data.tags !== undefined ||
+      data.notebookName !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replacements'],
+      message:
+        'replacements (patch mode) cannot be combined with title, content, tags, or notebookName',
+    });
+  }
+});
 
 export const DeleteNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
@@ -120,15 +151,6 @@ export const UpdateTagSchema = z.object({
   parentTagName: z.string().optional(),
 });
 
-export const PatchNoteSchema = z.object({
-  guid: z.string().min(1, 'GUID is required'),
-  replacements: z.array(z.object({
-    find: z.string().min(1, 'Find string must not be empty'),
-    replace: z.string(),
-    replaceAll: z.boolean().optional().default(true),
-  })).min(1, 'At least one replacement is required'),
-});
-
 export const PollingSchema = z.object({
   action: z.enum(['start', 'stop', 'poll', 'status']),
 });
@@ -153,7 +175,6 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_update_notebook: UpdateNotebookSchema,
   evernote_list_tags: ListTagsSchema,
   evernote_update_tag: UpdateTagSchema,
-  evernote_patch_note: PatchNoteSchema,
   evernote_polling: PollingSchema,
   evernote_connection: ConnectionSchema,
 };

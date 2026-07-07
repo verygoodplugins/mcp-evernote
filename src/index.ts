@@ -755,7 +755,8 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_update_note",
-    description: "Update an existing note",
+    description:
+      "Update an existing note. Full-update mode: pass title/content/tags/notebookName to replace those fields. Patch mode: pass replacements[] to apply targeted find-and-replace edits while preserving title, tags, notebook, and attachments — ideal for small changes like a status or date. The two modes are mutually exclusive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -765,20 +766,44 @@ const tools: Tool[] = [
         },
         title: {
           type: "string",
-          description: "New title (optional)",
+          description: "New title (full-update mode)",
         },
         content: {
           type: "string",
-          description: "New content (optional, Markdown supported)",
+          description: "New content (full-update mode, Markdown supported)",
         },
         notebookName: {
           type: "string",
-          description: "Move note to this notebook (optional)",
+          description: "Move note to this notebook (full-update mode)",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "New tags (replaces existing tags)",
+          description: "New tags, replacing existing tags (full-update mode)",
+        },
+        replacements: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              find: {
+                type: "string",
+                description: "Text to find (exact match)",
+              },
+              replace: {
+                type: "string",
+                description: "Replacement text",
+              },
+              replaceAll: {
+                type: "boolean",
+                description: "Replace all occurrences (default: true)",
+                default: true,
+              },
+            },
+            required: ["find", "replace"],
+          },
+          description:
+            "Patch mode: find-and-replace operations to apply. Mutually exclusive with title/content/tags/notebookName.",
         },
         forceUpdate: {
           type: "boolean",
@@ -1010,45 +1035,6 @@ const tools: Tool[] = [
       required: ["guid"],
     },
   },
-  // Patch note tool for targeted find-and-replace updates
-  {
-    name: "evernote_patch_note",
-    description:
-      "Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        guid: {
-          type: "string",
-          description: "Note GUID",
-        },
-        replacements: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              find: {
-                type: "string",
-                description: "Text to find (exact match)",
-              },
-              replace: {
-                type: "string",
-                description: "Replacement text",
-              },
-              replaceAll: {
-                type: "boolean",
-                description: "Replace all occurrences (default: true)",
-                default: true,
-              },
-            },
-            required: ["find", "replace"],
-          },
-          description: "Array of find-and-replace operations to apply",
-        },
-      },
-      required: ["guid", "replacements"],
-    },
-  },
 ];
 
 // List tools handler — injects live notebook names into descriptions when available
@@ -1174,6 +1160,35 @@ const legacyTools: Tool[] = [
         name: { type: "string", description: "Tag name" },
         guid: { type: "string", description: "Tag GUID" },
       },
+    },
+  },
+  {
+    name: "evernote_patch_note",
+    description:
+      "[DEPRECATED — use evernote_update_note with replacements[]] Apply targeted find-and-replace edits to a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        guid: { type: "string", description: "Note GUID" },
+        replacements: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              find: { type: "string", description: "Text to find (exact match)" },
+              replace: { type: "string", description: "Replacement text" },
+              replaceAll: {
+                type: "boolean",
+                description: "Replace all occurrences (default: true)",
+                default: true,
+              },
+            },
+            required: ["find", "replace"],
+          },
+          description: "Array of find-and-replace operations to apply",
+        },
+      },
+      required: ["guid", "replacements"],
     },
   },
 ];
@@ -1789,7 +1804,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           notebookName,
           tags,
           forceUpdate = false,
+          replacements,
         } = validatedArgs;
+
+        // Patch mode: targeted find-and-replace that preserves title, tags,
+        // notebook, and existing attachments (absorbs the retired patch_note).
+        if (replacements) {
+          const result = await evernoteApi.patchNoteContent(guid, replacements);
+          const changesSummary = result.changes
+            .map(
+              (c) =>
+                `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`,
+            )
+            .join("\n");
+
+          if (result.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
+              },
+            ],
+          };
+        }
 
         console.error(`Updating note ${guid}`);
 
@@ -2169,57 +2216,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
-
-      case "evernote_patch_note": {
-        const { guid, replacements } = validatedArgs;
-
-        if (
-          !replacements ||
-          !Array.isArray(replacements) ||
-          replacements.length === 0
-        ) {
-          throw new Error("At least one replacement must be provided");
-        }
-
-        // Validate each replacement has a non-empty find string
-        for (const r of replacements) {
-          if (!r.find || typeof r.find !== "string" || r.find.length === 0) {
-            throw new Error(
-              'Each replacement must have a non-empty "find" string',
-            );
-          }
-        }
-
-        const result = await evernoteApi.patchNoteContent(guid, replacements);
-
-        // Format the response
-        const changesSummary = result.changes
-          .map(
-            (c) =>
-              `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`,
-          )
-          .join("\n");
-
-        if (result.success) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
-              },
-            ],
-          };
-        } else {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
-              },
-            ],
-          };
-        }
       }
 
       case "evernote_connection": {

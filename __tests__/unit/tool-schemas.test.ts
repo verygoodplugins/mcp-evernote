@@ -7,7 +7,6 @@ import {
   GetNoteSchema,
   UpdateNoteSchema,
   DeleteNoteSchema,
-  PatchNoteSchema,
   ListNotebooksSchema,
   ListTagsSchema,
   AddResourceToNoteSchema,
@@ -135,6 +134,50 @@ describe('tool schemas (M1)', () => {
         UpdateNoteSchema.parse({ guid: 'abc-123', notebookName: '' }),
       ).toThrow(/Notebook name cannot be empty/);
     });
+
+    it('accepts a full-field update', () => {
+      const result = UpdateNoteSchema.parse({
+        guid: 'abc',
+        title: 'New',
+        tags: ['x'],
+      });
+      expect(result.title).toBe('New');
+    });
+
+    describe('patch mode (replacements)', () => {
+      it('rejects an empty replacements array', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({ guid: 'abc', replacements: [] }),
+        ).toThrow(/At least one replacement/);
+      });
+
+      it('rejects a replacement with an empty find', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            replacements: [{ find: '', replace: 'new' }],
+          }),
+        ).toThrow(/Find string must not be empty/);
+      });
+
+      it('defaults replaceAll to true', () => {
+        const result = UpdateNoteSchema.parse({
+          guid: 'abc',
+          replacements: [{ find: 'old', replace: 'new' }],
+        });
+        expect(result.replacements?.[0]?.replaceAll).toBe(true);
+      });
+
+      it('rejects combining replacements with full-field inputs', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            content: 'body',
+            replacements: [{ find: 'old', replace: 'new' }],
+          }),
+        ).toThrow(/cannot be combined/);
+      });
+    });
   });
 
   describe('DeleteNoteSchema', () => {
@@ -152,30 +195,6 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('PatchNoteSchema', () => {
-    it('rejects empty replacements array', () => {
-      expect(() =>
-        PatchNoteSchema.parse({ guid: 'abc', replacements: [] }),
-      ).toThrow(/At least one replacement/);
-    });
-
-    it('rejects replacement with empty find', () => {
-      expect(() =>
-        PatchNoteSchema.parse({
-          guid: 'abc',
-          replacements: [{ find: '', replace: 'new' }],
-        }),
-      ).toThrow(/Find string must not be empty/);
-    });
-
-    it('accepts valid replacements', () => {
-      const result = PatchNoteSchema.parse({
-        guid: 'abc',
-        replacements: [{ find: 'old', replace: 'new' }],
-      });
-      expect(result.replacements[0].replaceAll).toBe(true);
-    });
-  });
 
   describe('ListNotebooksSchema', () => {
     it('accepts empty args (list all)', () => {
