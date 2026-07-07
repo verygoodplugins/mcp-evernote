@@ -191,12 +191,23 @@ EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for 
 EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous NoteStore RPCs (default: 3)
 EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS=15   # Auto-retry a rate-limited call once if the wait is <= this many seconds; 0 = off
 EVERNOTE_MAX_RESPONSE_CHARS=60000           # Total note-body chars per multi-note response; bodies past this are dropped with truncated:true
+
+# Note body cache (optional)
+EVERNOTE_NOTE_CACHE_SIZE=200                 # Max notes held in the USN-keyed body cache; 0 disables
+EVERNOTE_NOTE_CACHE_SYNC_TTL_MS=30000        # How long a getSyncState result is trusted before re-checking for external edits
 ```
 
 On the hourly rate limit, tool errors return JSON with `error: "rate_limited"`
 and `retryAfterSeconds` (Evernote's exact backoff window). Bounding concurrency
 smooths bursts but cannot restore quota — the quota is a per-token hourly call
 count, so the durable fixes are fewer calls and honoring the backoff.
+
+Re-reading the same notes is served from an in-memory, USN-keyed body cache
+instead of re-spending `getNote` calls — the direct fix for the hourly limit
+tripping on repeat corpus reads. Notes you edit through this server are evicted
+immediately; edits made elsewhere are picked up within
+`EVERNOTE_NOTE_CACHE_SYNC_TTL_MS` via a sync-state probe. Extracted OCR /
+attachment text is always re-read live, never cached.
 
 ### 3. Configure Your Client
 

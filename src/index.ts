@@ -24,6 +24,11 @@ import {
   DEFAULT_MAX_RESPONSE_CHARS,
 } from "./response-budget.js";
 import {
+  DEFAULT_NOTE_CACHE_SIZE,
+  DEFAULT_NOTE_CACHE_SYNC_TTL_MS,
+  NoteCacheOptions,
+} from "./note-cache.js";
+import {
   enrichToolsWithNotebookDescriptions,
   resolveNotebookCacheForToolDescriptions,
 } from "./notebook-tool-descriptions.js";
@@ -110,6 +115,36 @@ const MAX_RESPONSE_CHARS = (() => {
     ? parsed
     : DEFAULT_MAX_RESPONSE_CHARS;
 })();
+
+// Resolve a non-negative integer env var, falling back on empty/NaN/negative
+// input. Unlike MAX_RESPONSE_CHARS, 0 is a valid value here (it disables the
+// cache / forces an immediate sync check), so only reject values below 0.
+function resolveNonNegativeInt(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+// Per-EvernoteAPI-instance note body cache. Keyed by note GUID, invalidated by
+// a TTL-gated sync probe (external edits) and evicted immediately on our own
+// writes. Roughly halves API calls when re-reading the same notes — the direct
+// fix for the hourly rate limit tripping on repeat corpus reads. Size 0 disables.
+const NOTE_CACHE_OPTIONS: NoteCacheOptions = {
+  maxEntries: resolveNonNegativeInt(
+    process.env.EVERNOTE_NOTE_CACHE_SIZE,
+    DEFAULT_NOTE_CACHE_SIZE,
+  ),
+  syncTtlMs: resolveNonNegativeInt(
+    process.env.EVERNOTE_NOTE_CACHE_SYNC_TTL_MS,
+    DEFAULT_NOTE_CACHE_SYNC_TTL_MS,
+  ),
+  logger: (message: string) => console.error(message),
+};
 
 // Polling state
 let lastUpdateCount: number | null = null;
@@ -345,7 +380,10 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
   try {
     lastInitAttempt = now;
     const { client, tokens } = await oauth.getAuthenticatedClient();
-    api = new EvernoteAPI(client, tokens, RPC_LIMIT_OPTIONS);
+    api = new EvernoteAPI(client, tokens, {
+      ...RPC_LIMIT_OPTIONS,
+      noteCache: NOTE_CACHE_OPTIONS,
+    });
     apiInitError = null;
     console.error("API initialized successfully");
     // Seed notebook cache in the background so descriptions are ready for ListTools
@@ -701,7 +739,7 @@ const tools: Tool[] = [
           type: "boolean",
           description:
             "Single-note mode: extract text from readable attachments — PDF text layers and Evernote OCR for images " +
-            "(default: true). When false, attachment resources are not fetched, so resource metadata is omitted too. " +
+            "(default: true). When false, attachment text is not extracted and resource bodies are not downloaded. " +
             "Ignored in batch (guids) mode, which never fetches attachment text.",
           default: true,
         },
@@ -1368,11 +1406,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let contentByGuid: Map<string, string | undefined> | undefined;
         let batchAborted: BatchFetchResult["aborted"];
         let batchFailed: BatchFetchResult["failed"] = [];
+        // We just read each note's current USN from findNotesMetadata; pass it
+        // to the cached reads so a body edited externally since it was cached is
+        // treated as a miss instead of pairing a fresh title with a stale body.
+        const knownUsns = new Map<string, number>(
+          results.notes
+            .filter((n: any) => typeof n.updateSequenceNum === "number")
+            .map((n: any) => [n.guid, n.updateSequenceNum]),
+        );
         if (includeContent && results.notes.length > 0) {
           const guids = results.notes.map((n: any) => n.guid);
           const batch = await evernoteApi.getNotesBatch(guids, {
             includeContent: true,
             format,
+            knownUsns,
           });
           contentByGuid = new Map(batch.notes.map((n) => [n.guid, n.content]));
           batchAborted = batch.aborted;
@@ -1418,7 +1465,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               // Preview-only: one getNote per note (the minimum to preview a
               // body). Cheaper than fetching content twice.
               try {
-                const preview = await evernoteApi.getNotePreview(note.guid, 300);
+                const preview = await evernoteApi.getNotePreview(
+                  note.guid,
+                  300,
+                  knownUsns.get(note.guid),
+                );
                 if (preview) {
                   enhanced.preview = preview;
                 }
@@ -1575,11 +1626,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Fetch resources whenever attachment text/resource metadata is wanted, independent of includeContent.
-        const note = await evernoteApi.getNote(
-          guid,
-          includeContent,
-          includeAttachmentText,
-        );
+        // When a body is requested, route through the USN-keyed cache; a
+        // metadata-only read (includeContent=false) has no body to cache. On a
+        // cache hit resource bodies are stripped, so attachment text below is
+        // still extracted live.
+        const note = includeContent
+          ? await evernoteApi.getNoteCached(guid, {
+              withResources: includeAttachmentText,
+            })
+          : await evernoteApi.getNote(guid, false, includeAttachmentText);
 
         const result: any = {
           guid: note.guid,
