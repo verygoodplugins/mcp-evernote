@@ -88,6 +88,19 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
     canonical: 'evernote_connection',
     mapArgs: () => ({ action: 'user' }),
   },
+
+  // Notebooks/tags list-absorbs-get (PR 4): list_* returns one entity when
+  // name/guid is supplied, else the full list.
+  evernote_get_notebook: {
+    canonical: 'evernote_list_notebooks',
+    mapArgs: (a) => ({ name: a.name, guid: a.guid }),
+    sampleArgs: { name: 'Finance' },
+  },
+  evernote_get_tag: {
+    canonical: 'evernote_list_tags',
+    mapArgs: (a) => ({ name: a.name, guid: a.guid }),
+    sampleArgs: { name: 'important' },
+  },
 };
 
 export interface ResolvedTool {

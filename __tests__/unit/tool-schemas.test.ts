@@ -8,8 +8,8 @@ import {
   UpdateNoteSchema,
   DeleteNoteSchema,
   PatchNoteSchema,
-  GetNotebookSchema,
-  GetTagSchema,
+  ListNotebooksSchema,
+  ListTagsSchema,
   AddResourceToNoteSchema,
   GetResourceSchema,
   ConnectionSchema,
@@ -177,27 +177,29 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('GetNotebookSchema', () => {
-    it('rejects when neither name nor guid provided', () => {
-      expect(() => GetNotebookSchema.parse({})).toThrow(
-        /Either name or guid/,
-      );
+  describe('ListNotebooksSchema', () => {
+    it('accepts empty args (list all)', () => {
+      expect(() => ListNotebooksSchema.parse({})).not.toThrow();
     });
 
-    it('accepts name only', () => {
-      const result = GetNotebookSchema.parse({ name: 'My Notebook' });
+    it('accepts name only (single lookup)', () => {
+      const result = ListNotebooksSchema.parse({ name: 'My Notebook' });
       expect(result.name).toBe('My Notebook');
     });
 
-    it('accepts guid only', () => {
-      const result = GetNotebookSchema.parse({ guid: 'abc' });
+    it('accepts guid only (single lookup)', () => {
+      const result = ListNotebooksSchema.parse({ guid: 'abc' });
       expect(result.guid).toBe('abc');
     });
   });
 
-  describe('GetTagSchema', () => {
-    it('rejects when neither name nor guid provided', () => {
-      expect(() => GetTagSchema.parse({})).toThrow(/Either name or guid/);
+  describe('ListTagsSchema', () => {
+    it('accepts empty args (list all)', () => {
+      expect(() => ListTagsSchema.parse({})).not.toThrow();
+    });
+
+    it('accepts name only (single lookup)', () => {
+      expect(ListTagsSchema.parse({ name: 'important' }).name).toBe('important');
     });
   });
 
@@ -283,9 +285,9 @@ describe('tool schemas (M1)', () => {
       expect(result.title).toBe('Test');
     });
 
-    it('passes through for unknown tools', () => {
+    it('passes through for tools without a schema', () => {
       const args = { foo: 'bar' };
-      const result = validateToolArgs('evernote_list_notebooks', args);
+      const result = validateToolArgs('evernote_unregistered_tool', args);
       expect(result).toBe(args);
     });
 

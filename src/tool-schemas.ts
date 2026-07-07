@@ -94,11 +94,11 @@ export const AddResourceToNoteSchema = z.object({
   filename: z.string().optional(),
 });
 
-export const GetNotebookSchema = z.object({
+// list_notebooks lists all notebooks, or returns one (fresh, full detail) when
+// name or guid is given — absorbing the retired get_notebook.
+export const ListNotebooksSchema = z.object({
   name: z.string().optional(),
   guid: z.string().optional(),
-}).refine(data => data.name || data.guid, {
-  message: 'Either name or guid must be provided',
 });
 
 export const UpdateNotebookSchema = z.object({
@@ -107,11 +107,11 @@ export const UpdateNotebookSchema = z.object({
   stack: z.string().optional(),
 });
 
-export const GetTagSchema = z.object({
+// list_tags lists all tags, or returns one (fresh, full detail) when name or
+// guid is given — absorbing the retired get_tag.
+export const ListTagsSchema = z.object({
   name: z.string().optional(),
   guid: z.string().optional(),
-}).refine(data => data.name || data.guid, {
-  message: 'Either name or guid must be provided',
 });
 
 export const UpdateTagSchema = z.object({
@@ -149,9 +149,9 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_create_tag: CreateTagSchema,
   evernote_get_resource: GetResourceSchema,
   evernote_add_resource_to_note: AddResourceToNoteSchema,
-  evernote_get_notebook: GetNotebookSchema,
+  evernote_list_notebooks: ListNotebooksSchema,
   evernote_update_notebook: UpdateNotebookSchema,
-  evernote_get_tag: GetTagSchema,
+  evernote_list_tags: ListTagsSchema,
   evernote_update_tag: UpdateTagSchema,
   evernote_patch_note: PatchNoteSchema,
   evernote_polling: PollingSchema,

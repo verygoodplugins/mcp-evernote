@@ -811,10 +811,20 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_notebooks",
-    description: "List all notebooks",
+    description:
+      "List all notebooks, or get one notebook's full detail by passing its name or guid.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        name: {
+          type: "string",
+          description: "If set, return just this notebook (looked up by name).",
+        },
+        guid: {
+          type: "string",
+          description: "If set, return just this notebook (looked up by GUID).",
+        },
+      },
     },
   },
   {
@@ -837,10 +847,20 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_tags",
-    description: "List all tags",
+    description:
+      "List all tags, or get one tag's full detail by passing its name or guid.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        name: {
+          type: "string",
+          description: "If set, return just this tag (looked up by name).",
+        },
+        guid: {
+          type: "string",
+          description: "If set, return just this tag (looked up by GUID).",
+        },
+      },
     },
   },
   {
@@ -944,24 +964,7 @@ const tools: Tool[] = [
       required: ["noteGuid", "filePath"],
     },
   },
-  // Notebook get/update tools
-  {
-    name: "evernote_get_notebook",
-    description: "Get notebook details by name or GUID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Notebook name",
-        },
-        guid: {
-          type: "string",
-          description: "Notebook GUID",
-        },
-      },
-    },
-  },
+  // Notebook update tool
   {
     name: "evernote_update_notebook",
     description: "Update notebook name or stack",
@@ -984,24 +987,7 @@ const tools: Tool[] = [
       required: ["guid"],
     },
   },
-  // Tag get/update tools
-  {
-    name: "evernote_get_tag",
-    description: "Get tag details by name or GUID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Tag name",
-        },
-        guid: {
-          type: "string",
-          description: "Tag GUID",
-        },
-      },
-    },
-  },
+  // Tag update tool
   {
     name: "evernote_update_tag",
     description: "Update tag name or parent",
@@ -1165,6 +1151,30 @@ const legacyTools: Tool[] = [
     description:
       '[DEPRECATED — use evernote_connection with action:"reconnect"] Force reconnection to Evernote.',
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_get_notebook",
+    description:
+      "[DEPRECATED — use evernote_list_notebooks with name or guid] Get notebook details by name or GUID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Notebook name" },
+        guid: { type: "string", description: "Notebook GUID" },
+      },
+    },
+  },
+  {
+    name: "evernote_get_tag",
+    description:
+      "[DEPRECATED — use evernote_list_tags with name or guid] Get tag details by name or GUID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Tag name" },
+        guid: { type: "string", description: "Tag GUID" },
+      },
+    },
   },
 ];
 
@@ -1912,8 +1922,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "evernote_list_notebooks": {
-        const notebooks = await getCachedNotebooks(evernoteApi);
+        const { name, guid } = validatedArgs;
 
+        // Single-notebook lookup when name/guid is given (absorbs get_notebook).
+        if (name || guid) {
+          let notebook;
+          if (guid) {
+            notebook = await evernoteApi.getNotebook(guid);
+          } else {
+            const notebooks = await evernoteApi.listNotebooks();
+            notebook = notebooks.find((nb) => nb.name === name);
+            if (!notebook) {
+              throw new Error(`Notebook '${name}' not found`);
+            }
+            notebook = await evernoteApi.getNotebook(notebook.guid);
+          }
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(notebook, null, 2) },
+            ],
+          };
+        }
+
+        const notebooks = await getCachedNotebooks(evernoteApi);
         return {
           content: [
             {
@@ -1940,8 +1971,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "evernote_list_tags": {
-        const tags = await getCachedTags(evernoteApi);
+        const { name, guid } = validatedArgs;
 
+        // Single-tag lookup when name/guid is given (absorbs get_tag).
+        if (name || guid) {
+          let tag;
+          if (guid) {
+            tag = await evernoteApi.getTag(guid);
+          } else {
+            const tags = await evernoteApi.listTags();
+            tag = tags.find((t) => t.name === name);
+            if (!tag) {
+              throw new Error(`Tag '${name}' not found`);
+            }
+            tag = await evernoteApi.getTag(tag.guid!);
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify(tag, null, 2) }],
+          };
+        }
+
+        const tags = await getCachedTags(evernoteApi);
         return {
           content: [
             {
@@ -2064,37 +2114,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Notebook get/update tools
-      case "evernote_get_notebook": {
-        const { name, guid } = validatedArgs;
-
-        if (!name && !guid) {
-          throw new Error("Either name or guid must be provided");
-        }
-
-        let notebook;
-        if (guid) {
-          notebook = await evernoteApi.getNotebook(guid);
-        } else {
-          const notebooks = await evernoteApi.listNotebooks();
-          notebook = notebooks.find((nb) => nb.name === name);
-          if (!notebook) {
-            throw new Error(`Notebook '${name}' not found`);
-          }
-          // Get full notebook details
-          notebook = await evernoteApi.getNotebook(notebook.guid);
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(notebook, null, 2),
-            },
-          ],
-        };
-      }
-
       case "evernote_update_notebook": {
         const { guid, name, stack } = validatedArgs;
         const notebook = await evernoteApi.getNotebook(guid);
@@ -2114,37 +2133,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `✅ Notebook updated!\nGUID: ${updatedNotebook.guid}\nName: ${updatedNotebook.name}\nStack: ${updatedNotebook.stack || "(none)"}`,
-            },
-          ],
-        };
-      }
-
-      // Tag get/update tools
-      case "evernote_get_tag": {
-        const { name, guid } = validatedArgs;
-
-        if (!name && !guid) {
-          throw new Error("Either name or guid must be provided");
-        }
-
-        let tag;
-        if (guid) {
-          tag = await evernoteApi.getTag(guid);
-        } else {
-          const tags = await evernoteApi.listTags();
-          tag = tags.find((t) => t.name === name);
-          if (!tag) {
-            throw new Error(`Tag '${name}' not found`);
-          }
-          // Get full tag details
-          tag = await evernoteApi.getTag(tag.guid!);
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(tag, null, 2),
             },
           ],
         };
