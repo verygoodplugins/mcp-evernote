@@ -96,6 +96,21 @@ export function truncatePlainText(text: string, maxLength = 300): string {
   return truncated + "...";
 }
 
+/**
+ * Whether a cached note (resource bodies stripped) should be re-fetched for an
+ * attachment-text read rather than served from cache. Only PDF text extraction
+ * needs the binary body, and a cache hit would recover each PDF body with a
+ * separate getResource call; re-fetching the note once returns all bodies inline
+ * in a single getNote. Image OCR uses recognition (fetched separately), so
+ * image-only or body-less notes are unaffected and keep serving from cache.
+ */
+function cachedNoteNeedsInlineBodies(note: any): boolean {
+  return (
+    Array.isArray(note?.resources) &&
+    note.resources.some((r: any) => r?.mime === "application/pdf")
+  );
+}
+
 export class EvernoteAPI {
   private noteStore: any;
   private client: any;
@@ -153,7 +168,15 @@ export class EvernoteAPI {
     const hit = this.noteCache.isFresh()
       ? this.noteCache.get(guid, withResources, opts.knownUsn)
       : undefined;
-    if (hit !== undefined) {
+    // A cache hit has resource bodies stripped. When bodies are needed
+    // (attachment-text reads) and the note has PDFs, serving the hit would make
+    // extractResourceText re-fetch each PDF body one getResource at a time — so
+    // for those, re-fetch the whole note once (getNote returns every body inline)
+    // instead. Image-only and body-less notes keep serving from cache.
+    if (
+      hit !== undefined &&
+      !(withResources && cachedNoteNeedsInlineBodies(hit))
+    ) {
       return hit;
     }
     const note = await this.getNote(guid, true, withResources);

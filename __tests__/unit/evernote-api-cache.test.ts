@@ -172,6 +172,80 @@ describe("EvernoteAPI note cache", () => {
     expect(getResource).toHaveBeenCalledWith("r1", true, false, false, false);
   });
 
+  it("re-fetches a multi-PDF note in one getNote on repeat attachment reads", async () => {
+    const pdfNote = (guid: string) => ({
+      ...noteFixture(guid),
+      resources: [
+        {
+          guid: "p1",
+          mime: "application/pdf",
+          data: {
+            size: 10,
+            bodyHash: Buffer.from("a"),
+            body: Buffer.from("x"),
+          },
+        },
+        {
+          guid: "p2",
+          mime: "application/pdf",
+          data: {
+            size: 10,
+            bodyHash: Buffer.from("b"),
+            body: Buffer.from("y"),
+          },
+        },
+      ],
+    });
+    const getNote = jest.fn(async (guid: string) => pdfNote(guid));
+    const getResource = jest.fn(async (..._a: any[]) => ({
+      mime: "application/pdf",
+      data: { size: 10 },
+    }));
+    const getSyncState = jest.fn(async () => ({ updateCount: 10 }));
+    const api = makeApi({
+      getNote,
+      getResource,
+      getSyncState,
+      getFilteredSyncChunk: jest.fn(),
+    });
+
+    // First attachment-text read fetches + caches (bodies stripped).
+    await api.getNoteCached("g1", { withResources: true });
+    // Repeat attachment-text read: PDFs present → re-fetch the note once (bodies
+    // inline) rather than a per-PDF getResource storm.
+    const second = await api.getNoteCached("g1", { withResources: true });
+
+    expect(getNote).toHaveBeenCalledTimes(2); // one getNote per attachment read
+    expect(second.resources[0].data.body).toBeDefined(); // inline bodies, no getResource needed
+  });
+
+  it("still serves image-only notes from cache on attachment reads", async () => {
+    const imageNote = (guid: string) => ({
+      ...noteFixture(guid),
+      resources: [
+        {
+          guid: "i1",
+          mime: "image/png",
+          data: { size: 10, bodyHash: Buffer.from("a") },
+        },
+      ],
+    });
+    const getNote = jest.fn(async (guid: string) => imageNote(guid));
+    const getSyncState = jest.fn(async () => ({ updateCount: 10 }));
+    const api = makeApi({
+      getNote,
+      getSyncState,
+      getFilteredSyncChunk: jest.fn(),
+    });
+
+    await api.getNoteCached("g1", { withResources: true });
+    await api.getNoteCached("g1", { withResources: true });
+
+    // Images use recognition (fetched separately), so the note itself is served
+    // from cache — the getNote isn't repeated.
+    expect(getNote).toHaveBeenCalledTimes(1);
+  });
+
   it("re-fetches a batch note when a caller-known USN is newer than the cached body", async () => {
     let calls = 0;
     const getNote = jest.fn(async (guid: string) => {
