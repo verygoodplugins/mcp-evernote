@@ -54,16 +54,25 @@ describe('OAuth Basic Tests', () => {
   });
 
   it('should throw authentication error when no tokens available', async () => {
-    const { EvernoteOAuth } = require('../../src/oauth');
-    const config = {
-      consumerKey: 'test-key',
-      consumerSecret: 'test-secret',
-      sandbox: true,
-      china: false,
-    };
+    const originalCwd = process.cwd();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-evernote-oauth-'));
+    process.chdir(tempDir);
 
-    const oauth = new EvernoteOAuth(config);
-    await expect(oauth.getAccessToken()).rejects.toThrow('Authentication required');
+    try {
+      const { EvernoteOAuth } = require('../../src/oauth');
+      const config = {
+        consumerKey: 'test-key',
+        consumerSecret: 'test-secret',
+        sandbox: true,
+        china: false,
+      };
+
+      const oauth = new EvernoteOAuth(config);
+      await expect(oauth.getAccessToken()).rejects.toThrow('Authentication required');
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('should use OAUTH_TOKEN when in Claude Code environment', async () => {

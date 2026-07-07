@@ -99,6 +99,8 @@ let tagCacheAt = 0;
 const ENTITY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let notebookRefreshInFlight: Promise<NotebookInfo[]> | null = null;
 let tagRefreshInFlight: Promise<any[]> | null = null;
+let notebookCacheGeneration = 0;
+let tagCacheGeneration = 0;
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
@@ -133,9 +135,14 @@ function clearEntityCaches(): void {
   tagCacheAt = 0;
   notebookRefreshInFlight = null;
   tagRefreshInFlight = null;
+  notebookCacheGeneration++;
+  tagCacheGeneration++;
 }
 
-function getEvernoteErrorMeta(error: any): { errorCode?: number; rateLimitDuration?: number } {
+function getEvernoteErrorMeta(error: any): {
+  errorCode?: number;
+  rateLimitDuration?: number;
+} {
   const original = error?.originalError ?? error;
   return {
     errorCode: error?.errorCode ?? original?.errorCode,
@@ -147,15 +154,17 @@ async function refreshNotebookCache(
   evernoteApi: EvernoteAPI,
 ): Promise<NotebookInfo[] | null> {
   try {
-    notebookCache = await evernoteApi.listNotebooks();
-    notebookCacheAt = Date.now();
+    const notebooks = await getCachedNotebooks(evernoteApi);
     console.error(
-      `Notebook cache refreshed: ${notebookCache.length} notebooks`,
+      `Notebook cache refreshed: ${notebooks.length} notebooks`,
     );
-    return notebookCache;
+    return notebooks;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
-    return notebookCache;
+    if (notebookCache !== null && !isAuthFailure(error)) {
+      return notebookCache;
+    }
+    return null;
   }
 }
 
@@ -176,8 +185,13 @@ async function getCachedNotebooks(
   }
 
   notebookRefreshInFlight = (async () => {
+    const generation = notebookCacheGeneration;
     try {
-      notebookCache = await evernoteApi.listNotebooks();
+      const notebooks = await evernoteApi.listNotebooks();
+      if (generation !== notebookCacheGeneration) {
+        return notebookCache ?? notebooks;
+      }
+      notebookCache = notebooks;
       notebookCacheAt = Date.now();
       return notebookCache;
     } catch (error) {
@@ -207,8 +221,13 @@ async function getCachedTags(evernoteApi: EvernoteAPI): Promise<any[]> {
   }
 
   tagRefreshInFlight = (async () => {
+    const generation = tagCacheGeneration;
     try {
-      tagCache = await evernoteApi.listTags();
+      const tags = await evernoteApi.listTags();
+      if (generation !== tagCacheGeneration) {
+        return tagCache ?? tags;
+      }
+      tagCache = tags;
       tagCacheAt = Date.now();
       return tagCache;
     } catch (error) {
@@ -294,7 +313,7 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     apiInitError = null;
     console.error("API initialized successfully");
     // Seed notebook cache in the background so descriptions are ready for ListTools
-    refreshNotebookCache(api).catch(() => {});
+    getCachedNotebooks(api).catch(() => {});
     return api;
   } catch (error: any) {
     apiInitError = error.message || "Failed to initialize Evernote API";
@@ -2106,8 +2125,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     console.error(
       `Tool failed: ${name} at ${timestamp} - ${error.message}` +
-      `${errorCode ? ` (code: ${errorCode})` : ""}` +
-      `${rateLimitDuration ? ` rateLimitDuration=${rateLimitDuration}s` : ""}`,
+        `${errorCode ? ` (code: ${errorCode})` : ""}` +
+        `${rateLimitDuration ? ` rateLimitDuration=${rateLimitDuration}s` : ""}`,
     );
 
     // Return error information without sensitive data. Surface Evernote's
