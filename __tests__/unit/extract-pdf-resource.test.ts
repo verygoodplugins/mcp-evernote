@@ -276,4 +276,47 @@ describe("EvernoteAPI.extractResourceText", () => {
       ),
     ).rejects.toMatchObject({ errorCode: 19, rateLimitDuration: 30 });
   });
+
+  it("returns PDF fallback text when OCR lookup fails for a scanned PDF", async () => {
+    MockedPDFParse.mockImplementation(() => ({
+      getText: jest
+        .fn<() => Promise<{ text: string }>>()
+        .mockResolvedValue({ text: "" }),
+    }));
+    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
+    const getResourceRecognition = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockRejectedValue(new Error("recognition not found"));
+    const prefetched = {
+      mime: "application/pdf",
+      data: { body: Buffer.from("%PDF-1.4") },
+    };
+
+    const result = await makeApi(
+      getResource,
+      getResourceRecognition,
+    ).extractResourceText("pdf-guid", prefetched);
+
+    expect(result).toContain("PDF text extraction");
+    expect(getResourceRecognition).toHaveBeenCalledWith("pdf-guid");
+  });
+
+  it("does not call recognition API for unsupported attachment types", async () => {
+    const getResource = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue({
+        mime: "application/zip",
+        recognition: { bodyHash: Buffer.from("hash"), size: 128 },
+      });
+    const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>();
+
+    const result = await makeApi(
+      getResource,
+      getResourceRecognition,
+    ).extractResourceText("zip-guid");
+
+    expect(result).toContain("No text extraction available");
+    expect(result).toContain("application/zip");
+    expect(getResourceRecognition).not.toHaveBeenCalled();
+  });
 });

@@ -82,6 +82,7 @@ let notebookCache: NotebookInfo[] | null = null;
 let notebookCacheAt = 0;
 const NOTEBOOK_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let notebookRefreshInFlight: Promise<NotebookInfo[]> | null = null;
+let notebookCacheGeneration = 0;
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
@@ -111,6 +112,7 @@ function clearNotebookCache(): void {
   notebookCache = null;
   notebookCacheAt = 0;
   notebookRefreshInFlight = null;
+  notebookCacheGeneration++;
 }
 
 function getEvernoteErrorMeta(error: any): { errorCode?: number; rateLimitDuration?: number } {
@@ -125,16 +127,15 @@ function canExtractAttachmentText(resource: any): boolean {
   return (
     resource?.mime === 'application/pdf' ||
     resource?.mime?.startsWith('image/') ||
-    resource?.recognition != null
+    (!resource?.mime && resource?.recognition != null)
   );
 }
 
 async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
-    notebookCache = await evernoteApi.listNotebooks();
-    notebookCacheAt = Date.now();
-    console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
-    return notebookCache;
+    const notebooks = await getCachedNotebooks(evernoteApi);
+    console.error(`Notebook cache refreshed: ${notebooks.length} notebooks`);
+    return notebooks;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
     if (notebookCache !== null && !isAuthFailure(error)) {
@@ -157,8 +158,13 @@ async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInf
   }
 
   notebookRefreshInFlight = (async () => {
+    const generation = notebookCacheGeneration;
     try {
-      notebookCache = await evernoteApi.listNotebooks();
+      const notebooks = await evernoteApi.listNotebooks();
+      if (generation !== notebookCacheGeneration) {
+        return notebookCache ?? notebooks;
+      }
+      notebookCache = notebooks;
       notebookCacheAt = Date.now();
       return notebookCache;
     } catch (error) {
@@ -237,7 +243,7 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     apiInitError = null;
     console.error('API initialized successfully');
     // Seed notebook cache in the background so descriptions are ready for ListTools
-    refreshNotebookCache(api).catch(() => {});
+    getCachedNotebooks(api).catch(() => {});
     return api;
   } catch (error: any) {
     apiInitError = error.message || 'Failed to initialize Evernote API';
@@ -1255,12 +1261,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             if (includeAttachmentText && r.guid && canExtractAttachmentText(r)) {
               // Reuse the resource body/recognition already fetched with the note when available.
-              const attachmentText = await evernoteApi.extractResourceText(r.guid, r);
-              resourceInfo.attachmentText = attachmentText;
-              if (r.mime === 'application/pdf') {
-                resourceInfo.pdfText = attachmentText;
-              } else {
-                resourceInfo.ocrText = attachmentText;
+              try {
+                const attachmentText = await evernoteApi.extractResourceText(r.guid, r);
+                resourceInfo.attachmentText = attachmentText;
+                if (r.mime === 'application/pdf') {
+                  resourceInfo.pdfText = attachmentText;
+                } else {
+                  resourceInfo.ocrText = attachmentText;
+                }
+              } catch (error) {
+                const meta = getEvernoteErrorMeta(error);
+                if (isAuthFailure(error) || meta.errorCode === 19) {
+                  throw error;
+                }
+                const mimeSuffix = r.mime ? ` (mime: ${r.mime})` : '';
+                resourceInfo.attachmentText =
+                  `[No OCR text extraction available for resource${mimeSuffix}]`;
               }
             }
 

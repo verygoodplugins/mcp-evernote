@@ -17,7 +17,7 @@ describe('process error handlers (M5)', () => {
   it('uncaughtException handler calls process.exit', () => {
     // The handler should contain process.exit(1)
     const uncaughtBlock = indexSource.match(
-      /process\.on\('uncaughtException'[\s\S]*?\}\);/,
+      /process\.on\(['"]uncaughtException['"][\s\S]*?\}\);/,
     );
     expect(uncaughtBlock).not.toBeNull();
     expect(uncaughtBlock![0]).toContain('process.exit(1)');
@@ -25,7 +25,7 @@ describe('process error handlers (M5)', () => {
 
   it('uncaughtException handler does not attempt recovery', () => {
     const uncaughtBlock = indexSource.match(
-      /process\.on\('uncaughtException'[\s\S]*?\}\);/,
+      /process\.on\(['"]uncaughtException['"][\s\S]*?\}\);/,
     );
     expect(uncaughtBlock).not.toBeNull();
     // Should NOT contain state reset logic
@@ -35,7 +35,7 @@ describe('process error handlers (M5)', () => {
 
   it('unhandledRejection handler calls process.exit', () => {
     const rejectionBlock = indexSource.match(
-      /process\.on\('unhandledRejection'[\s\S]*?\}\);/,
+      /process\.on\(['"]unhandledRejection['"][\s\S]*?\}\);/,
     );
     expect(rejectionBlock).not.toBeNull();
     expect(rejectionBlock![0]).toContain('process.exit(1)');
@@ -43,7 +43,7 @@ describe('process error handlers (M5)', () => {
 
   it('unhandledRejection handler does not attempt recovery', () => {
     const rejectionBlock = indexSource.match(
-      /process\.on\('unhandledRejection'[\s\S]*?\}\);/,
+      /process\.on\(['"]unhandledRejection['"][\s\S]*?\}\);/,
     );
     expect(rejectionBlock).not.toBeNull();
     expect(rejectionBlock![0]).not.toContain('api = null');
@@ -51,7 +51,7 @@ describe('process error handlers (M5)', () => {
 
   it('handlers do not log full stack traces', () => {
     const uncaughtBlock = indexSource.match(
-      /process\.on\('uncaughtException'[\s\S]*?\}\);/,
+      /process\.on\(['"]uncaughtException['"][\s\S]*?\}\);/,
     );
     expect(uncaughtBlock).not.toBeNull();
     expect(uncaughtBlock![0]).not.toContain('error.stack');

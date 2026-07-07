@@ -502,6 +502,11 @@ export class EvernoteAPI {
       return recognitionText || pdfText;
     }
 
+    if (!this.supportsOcrLookup(resource)) {
+      const mime = resource?.mime ? ` (mime: ${resource.mime})` : "";
+      return `[No text extraction available for resource${mime}]`;
+    }
+
     const recognitionText = await this.extractRecognitionTextFromResource(
       resourceGuid,
       resource,
@@ -680,21 +685,57 @@ export class EvernoteAPI {
     return false;
   }
 
+  private supportsOcrLookup(resource: any): boolean {
+    if (
+      resource?.mime === 'application/pdf' ||
+      resource?.mime?.startsWith('image/')
+    ) {
+      return true;
+    }
+    // MIME is occasionally missing on resources that still carry recognition metadata.
+    if (!resource?.mime && resource?.recognition != null) {
+      return true;
+    }
+    return false;
+  }
+
+  private shouldPropagateRecognitionError(error: unknown): boolean {
+    const code = (error as { errorCode?: number })?.errorCode;
+    if (code === 9 || code === 19) {
+      return true;
+    }
+    const msg = error instanceof Error ? error.message : String(error);
+    return /authentication required|token may be expired|invalid token|not connected/i.test(
+      msg,
+    );
+  }
+
   private async extractRecognitionTextFromResource(
     resourceGuid: string,
     resource: any,
   ): Promise<string | null> {
+    if (!this.supportsOcrLookup(resource)) {
+      return null;
+    }
+
     let recognition: RecognitionData;
-    if (
-      resource?.recognition != null &&
-      this.hasParseableRecognitionBody(resource.recognition)
-    ) {
-      recognition = this.parseRecognitionXml(
-        resourceGuid,
-        this.recognitionXmlPayload(resource.recognition),
-      );
-    } else {
-      recognition = await this.getResourceRecognition(resourceGuid);
+    try {
+      if (
+        resource?.recognition != null &&
+        this.hasParseableRecognitionBody(resource.recognition)
+      ) {
+        recognition = this.parseRecognitionXml(
+          resourceGuid,
+          this.recognitionXmlPayload(resource.recognition),
+        );
+      } else {
+        recognition = await this.getResourceRecognition(resourceGuid);
+      }
+    } catch (error) {
+      if (this.shouldPropagateRecognitionError(error)) {
+        throw error;
+      }
+      return null;
     }
 
     const text = this.extractTextFromRecognition(recognition);
