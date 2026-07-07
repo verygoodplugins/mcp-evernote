@@ -12,6 +12,7 @@ import { EvernoteOAuth } from "./oauth.js";
 import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
+import { resolveToolAlias } from "./tool-aliases.js";
 import { computeWebhookSignature } from "./webhook.js";
 import { buildToolErrorPayload, getEvernoteErrorMeta } from "./errors.js";
 import {
@@ -86,6 +87,11 @@ const POLL_INTERVAL = Math.max(
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
 const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
 const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
+
+// When true, re-advertise retired tool names in ListTools for discover-by-list
+// clients during the deprecation window. Retired names always stay callable via
+// TOOL_ALIASES regardless of this flag — it only controls visibility.
+const LEGACY_TOOLS_ENABLED = process.env.EVERNOTE_LEGACY_TOOLS === "true";
 
 // NoteStore RPC transport tuning. Bounding concurrency keeps a wide fan-out
 // from bursting past Evernote's hourly rate limit; short waits auto-retry.
@@ -1135,6 +1141,11 @@ const tools: Tool[] = [
 ];
 
 // List tools handler — injects live notebook names into descriptions when available
+// Retired tool names re-advertised only when EVERNOTE_LEGACY_TOOLS=true. The
+// consolidation PRs move each retired Tool definition here (with a
+// `[DEPRECATED — use <canonical>]` description); empty until then.
+const legacyTools: Tool[] = [];
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   notebookCache = await resolveNotebookCacheForToolDescriptions({
     currentCache: notebookCache,
@@ -1144,12 +1155,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     logError: (message) => console.error(message),
   });
 
-  return { tools: enrichToolsWithNotebookDescriptions(tools, notebookCache) };
+  const advertised = LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools;
+  return { tools: enrichToolsWithNotebookDescriptions(advertised, notebookCache) };
 });
+
+// Retired tool names stay callable via TOOL_ALIASES; warn once per alias so a
+// long-lived server doesn't spam its log. stderr only — stdout is the MCP channel.
+const warnedAliases = new Set<string>();
+function warnDeprecatedAlias(oldName: string, canonical: string): void {
+  if (warnedAliases.has(oldName)) return;
+  warnedAliases.add(oldName);
+  console.error(
+    `[deprecation] Tool "${oldName}" is retired; routing to "${canonical}". ` +
+      `Update callers; set EVERNOTE_LEGACY_TOOLS=true to re-list retired names.`,
+  );
+}
 
 // Call tool handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  // Resolve a possibly-retired tool name to its canonical form BEFORE
+  // validation, so aliased calls validate against — and route to — the
+  // canonical handler. Non-aliased names pass through unchanged.
+  const resolved = resolveToolAlias(request.params.name, request.params.arguments);
+  const name = resolved.name;
+  const args = resolved.args;
+  if (resolved.aliased) {
+    warnDeprecatedAlias(request.params.name, name);
+  }
 
   // Validate tool arguments against Zod schemas
   let validatedArgs: any;
