@@ -100,6 +100,15 @@ function errorMessage(error: unknown): string {
   }
 }
 
+function isAuthFailure(error: unknown): boolean {
+  const code = (error as { errorCode?: number })?.errorCode;
+  if (code === 9) {
+    return true;
+  }
+  const msg = errorMessage(error);
+  return /authentication required|token may be expired|invalid token|not connected/i.test(msg);
+}
+
 async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
@@ -127,7 +136,7 @@ async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInf
     notebookCacheAt = Date.now();
     return notebookCache;
   } catch (error) {
-    if (notebookCache !== null) {
+    if (notebookCache !== null && !isAuthFailure(error)) {
       console.error(`listNotebooks failed; serving stale notebook cache: ${errorMessage(error)}`);
       return notebookCache;
     }
@@ -146,7 +155,7 @@ async function getCachedTags(evernoteApi: EvernoteAPI): Promise<any[]> {
     tagCacheAt = Date.now();
     return tagCache;
   } catch (error) {
-    if (tagCache !== null) {
+    if (tagCache !== null && !isAuthFailure(error)) {
       console.error(`listTags failed; serving stale tag cache: ${errorMessage(error)}`);
       return tagCache;
     }
