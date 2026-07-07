@@ -414,6 +414,39 @@ export class EvernoteAPI {
     }
   }
 
+  /**
+   * Extract plain text from any resource type this server can read.
+   *
+   * PDFs use local text-layer extraction via pdf-parse. Other resources use
+   * Evernote's recognition XML when available, which covers image OCR.
+   */
+  async extractResourceText(resourceGuid: string, prefetched?: any): Promise<string> {
+    let resource: any;
+    try {
+      resource = prefetched ?? await this.getResource(resourceGuid, true);
+    } catch {
+      return '[Resource text extraction failed — could not retrieve the attachment]';
+    }
+
+    if (resource?.mime === 'application/pdf') {
+      const pdfText = await this.extractPdfTextFromResource(resourceGuid, resource);
+      if (!this.isPdfExtractionFallback(pdfText)) {
+        return pdfText;
+      }
+
+      const recognitionText = await this.extractRecognitionTextFromResource(resourceGuid, resource);
+      return recognitionText || pdfText;
+    }
+
+    const recognitionText = await this.extractRecognitionTextFromResource(resourceGuid, resource);
+    if (recognitionText == null) {
+      const mime = resource?.mime ? ` (mime: ${resource.mime})` : '';
+      return `[No text extraction available for resource${mime}]`;
+    }
+
+    return recognitionText || '[No OCR text recognized for resource]';
+  }
+
   async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {
     const note = await this.noteStore.getNote(noteGuid, false, true, false, false);
 
@@ -521,6 +554,32 @@ export class EvernoteAPI {
     }
 
     return { resourceGuid, items };
+  }
+
+  extractTextFromRecognition(recognition: RecognitionData): string {
+    return recognition.items
+      .map(item => item.alternatives[0]?.text)
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private async extractRecognitionTextFromResource(
+    resourceGuid: string,
+    resource: any
+  ): Promise<string | null> {
+    try {
+      const recognition = resource?.recognition != null
+        ? this.parseRecognitionXml(resourceGuid, resource.recognition)
+        : await this.getResourceRecognition(resourceGuid);
+
+      return this.extractTextFromRecognition(recognition);
+    } catch {
+      return null;
+    }
+  }
+
+  private isPdfExtractionFallback(text: string): boolean {
+    return text.startsWith('[PDF text extraction ');
   }
 
   private getMimeType(ext: string): string {

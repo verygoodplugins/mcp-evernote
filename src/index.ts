@@ -95,6 +95,14 @@ function errorMessage(error: unknown): string {
   }
 }
 
+function canExtractAttachmentText(resource: any): boolean {
+  return (
+    resource?.mime === 'application/pdf' ||
+    resource?.mime?.startsWith('image/') ||
+    resource?.recognition != null
+  );
+}
+
 async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
@@ -426,7 +434,7 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_get_note',
-    description: 'Get a specific note by its GUID. PDF attachment text is extracted and included by default; set includePdfContent: false to skip it.',
+    description: 'Get a specific note by its GUID. Attachment text from PDFs and image OCR is extracted and included by default; set includeAttachmentText: false to skip it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -442,8 +450,15 @@ const tools: Tool[] = [
         includePdfContent: {
           type: 'boolean',
           description:
-            'Extract and include text from PDF attachments (default: true). When false, ' +
+            'Deprecated alias for includeAttachmentText. When false and includeAttachmentText is unset, ' +
             'attachment resources are not fetched, so resource metadata is omitted from the response too.',
+          default: true,
+        },
+        includeAttachmentText: {
+          type: 'boolean',
+          description:
+            'Extract and include text from readable attachments: PDF text layers and Evernote OCR for images (default: true). ' +
+            'When false, attachment resources are not fetched, so resource metadata is omitted from the response too.',
           default: true,
         },
       },
@@ -698,13 +713,13 @@ const tools: Tool[] = [
   },
   {
     name: 'evernote_get_resource_text',
-    description: 'Extract plain text from a PDF resource attachment. Returns the text content, or an explanatory message if extraction failed (e.g. scanned/image-only PDF). Use this to read a specific PDF by its resource GUID.',
+    description: 'Extract plain text from a resource attachment. Supports PDF text layers and Evernote OCR recognition for images. Returns the text content or an explanatory message if extraction is unavailable.',
     inputSchema: {
       type: 'object',
       properties: {
         resourceGuid: {
           type: 'string',
-          description: 'Resource GUID of the PDF attachment',
+          description: 'Resource GUID of the attachment',
         },
       },
       required: ['resourceGuid'],
@@ -1126,9 +1141,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_get_note': {
-        const { guid, includeContent = true, includePdfContent = true } = validatedArgs;
-        // Fetch resources whenever PDF text/resource metadata is wanted, independent of includeContent.
-        const note = await evernoteApi.getNote(guid, includeContent, includePdfContent);
+        const { guid, includeContent = true, includeAttachmentText = true } = validatedArgs;
+        // Fetch resources whenever attachment text/resource metadata is wanted, independent of includeContent.
+        const note = await evernoteApi.getNote(guid, includeContent, includeAttachmentText);
 
         const result: any = {
           guid: note.guid,
@@ -1145,7 +1160,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           result.tags = note.tagNames;
         }
 
-        // Include resource metadata; extract PDF text for PDF attachments.
+        // Include resource metadata; extract text for readable attachments.
         // Processed sequentially so a note with many attachments can't fan out
         // into unbounded concurrent binary downloads (rate-limit / memory pressure).
         if (note.resources && note.resources.length > 0) {
@@ -1158,9 +1173,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               size: r.data?.size || 0,
             };
 
-            if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
-              // Reuse the resource body already fetched with the note (no second download).
-              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid, r);
+            if (includeAttachmentText && r.guid && canExtractAttachmentText(r)) {
+              // Reuse the resource body/recognition already fetched with the note when available.
+              const attachmentText = await evernoteApi.extractResourceText(r.guid, r);
+              resourceInfo.attachmentText = attachmentText;
+              if (r.mime === 'application/pdf') {
+                resourceInfo.pdfText = attachmentText;
+              } else {
+                resourceInfo.ocrText = attachmentText;
+              }
             }
 
             resources.push(resourceInfo);
@@ -1299,7 +1320,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'evernote_list_notebooks': {
         const notebooks = await evernoteApi.listNotebooks();
-        
+
         return {
           content: [
             {
@@ -1448,10 +1469,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const recognition = await evernoteApi.getResourceRecognition(resourceGuid);
 
         // Extract just the text for a summary
-        const allText = recognition.items
-          .map(item => item.alternatives[0]?.text)
-          .filter(Boolean)
-          .join(' ');
+        const allText = evernoteApi.extractTextFromRecognition(recognition);
 
         return {
           content: [
@@ -1472,7 +1490,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'evernote_get_resource_text': {
         const { resourceGuid } = validatedArgs;
-        const text = await evernoteApi.extractPdfTextFromResource(resourceGuid);
+        const text = await evernoteApi.extractResourceText(resourceGuid);
 
         return {
           content: [

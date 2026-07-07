@@ -13,8 +13,11 @@ const MockedPDFParse = PDFParse as unknown as jest.Mock;
  * Build an EvernoteAPI backed by a mock noteStore whose getResource is the
  * supplied jest mock. The constructor only needs client.getNoteStore(url).
  */
-function makeApi(getResource: jest.Mock<(...args: any[]) => Promise<any>>) {
-  const noteStore = { getResource };
+function makeApi(
+  getResource: jest.Mock<(...args: any[]) => Promise<any>>,
+  getResourceRecognition: jest.Mock<(...args: any[]) => Promise<any>> = jest.fn(),
+) {
+  const noteStore = { getResource, getResourceRecognition };
   const client = { getNoteStore: () => noteStore };
   return new EvernoteAPI(client as any, { noteStoreUrl: 'https://example/notestore' } as any);
 }
@@ -69,5 +72,84 @@ describe('EvernoteAPI.extractPdfTextFromResource', () => {
       .mockRejectedValue(new Error('network'));
     const result = await makeApi(getResource).extractPdfTextFromResource('g5');
     expect(result).toBe('[PDF text extraction failed — could not retrieve the attachment]');
+  });
+});
+
+describe('EvernoteAPI.extractResourceText', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    MockedPDFParse.mockImplementation(() => ({
+      getText: jest.fn<() => Promise<{ text: string }>>().mockResolvedValue({ text: 'pdf text' }),
+    }));
+  });
+
+  it('extracts text from PDF resources using the PDF parser', async () => {
+    const getResource = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue({ mime: 'application/pdf', data: { body: Buffer.from('%PDF-1.4') } });
+    const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>();
+
+    const result = await makeApi(getResource, getResourceRecognition).extractResourceText('pdf-guid');
+
+    expect(result).toBe('pdf text');
+    expect(getResourceRecognition).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Evernote recognition text when a PDF has no text layer', async () => {
+    MockedPDFParse.mockImplementation(() => ({
+      getText: jest.fn<() => Promise<{ text: string }>>().mockResolvedValue({ text: '' }),
+    }));
+    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
+    const prefetched = {
+      mime: 'application/pdf',
+      data: { body: Buffer.from('%PDF-1.4') },
+      recognition: Buffer.from(`
+        <recoIndex>
+          <item x="1" y="2" w="3" h="4"><t w="97">PDF OCR fallback</t></item>
+        </recoIndex>
+      `),
+    };
+
+    const result = await makeApi(getResource).extractResourceText('pdf-guid', prefetched);
+
+    expect(result).toBe('PDF OCR fallback');
+  });
+
+  it('extracts OCR text from image recognition data', async () => {
+    const getResource = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue({ mime: 'image/png', data: { body: Buffer.from('image') } });
+    const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(`
+      <recoIndex>
+        <item x="1" y="2" w="3" h="4"><t w="95">Hello</t></item>
+        <item x="5" y="6" w="7" h="8"><t w="92">image OCR</t></item>
+      </recoIndex>
+    `);
+
+    const result = await makeApi(getResource, getResourceRecognition).extractResourceText('image-guid');
+
+    expect(result).toBe('Hello image OCR');
+    expect(getResourceRecognition).toHaveBeenCalledWith('image-guid');
+    expect(MockedPDFParse).not.toHaveBeenCalled();
+  });
+
+  it('reuses prefetched recognition data and does not download the resource again', async () => {
+    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
+    const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>();
+    const prefetched = {
+      mime: 'image/jpeg',
+      recognition: Buffer.from(`
+        <recoIndex>
+          <item x="1" y="2" w="3" h="4"><t w="99">Prefetched OCR</t></item>
+        </recoIndex>
+      `),
+    };
+
+    const result = await makeApi(getResource, getResourceRecognition).extractResourceText('image-guid', prefetched);
+
+    expect(result).toBe('Prefetched OCR');
+    expect(getResource).not.toHaveBeenCalled();
+    expect(getResourceRecognition).not.toHaveBeenCalled();
+    expect(MockedPDFParse).not.toHaveBeenCalled();
   });
 });

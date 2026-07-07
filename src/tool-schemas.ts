@@ -17,8 +17,12 @@ export const SearchNotesSchema = z.object({
 export const GetNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   includeContent: z.boolean().optional().default(true),
-  includePdfContent: z.boolean().optional().default(true),
-});
+  includePdfContent: z.boolean().optional(),
+  includeAttachmentText: z.boolean().optional(),
+}).transform(data => ({
+  ...data,
+  includeAttachmentText: data.includeAttachmentText ?? data.includePdfContent ?? true,
+}));
 
 export const GetResourceTextSchema = z.object({
   resourceGuid: z.string().min(1, 'Resource GUID is required'),
