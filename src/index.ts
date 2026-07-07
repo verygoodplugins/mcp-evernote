@@ -901,37 +901,19 @@ const tools: Tool[] = [
     },
   },
   {
-    name: "evernote_start_polling",
+    name: "evernote_polling",
     description:
-      "Start polling for Evernote changes. Checks for new/updated notes and sends notifications to configured webhook URL.",
+      'Manage background polling for Evernote changes (detected changes are sent to the configured webhook). action: "start" begins polling, "stop" halts it, "poll" checks once immediately, "status" returns the current polling configuration and state.',
     inputSchema: {
       type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_stop_polling",
-    description: "Stop polling for Evernote changes",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_poll_now",
-    description:
-      "Check for Evernote changes immediately without waiting for next poll interval",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_polling_status",
-    description: "Get the current polling configuration and status",
-    inputSchema: {
-      type: "object",
-      properties: {},
+      properties: {
+        action: {
+          type: "string",
+          enum: ["start", "stop", "poll", "status"],
+          description: "Polling operation to perform.",
+        },
+      },
+      required: ["action"],
     },
   },
   // Resource tools
@@ -1144,6 +1126,30 @@ const legacyTools: Tool[] = [
       required: ["resourceGuid"],
     },
   },
+  {
+    name: "evernote_start_polling",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"start"] Start polling for Evernote changes.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_stop_polling",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"stop"] Stop polling for Evernote changes.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_poll_now",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"poll"] Check for Evernote changes immediately.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_polling_status",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"status"] Get the current polling configuration and status.',
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -1246,86 +1252,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    // Handle polling tools
-    if (name === "evernote_start_polling") {
-      startPolling();
-      const status = getPollingStatus();
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
-              `Webhook: ${WEBHOOK_URL || "Not configured"}\n\n` +
-              `Changes will be detected and sent to the webhook URL when found.`,
-          },
-        ],
-      };
-    }
+    // Handle polling operations (no API needed — polling owns its own state).
+    if (name === "evernote_polling") {
+      const { action } = validatedArgs;
 
-    if (name === "evernote_stop_polling") {
-      stopPolling();
-      return {
-        content: [
-          {
-            type: "text",
-            text: "✅ Polling stopped",
-          },
-        ],
-      };
-    }
-
-    if (name === "evernote_poll_now") {
-      try {
-        const changes = await pollOnce();
-        if (changes.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "✅ Poll complete - no changes detected",
-              },
-            ],
-          };
-        }
-
-        const changesSummary = changes
-          .map((c) => `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`)
-          .join("\n");
-
+      if (action === "start") {
+        startPolling();
+        const status = getPollingStatus();
         return {
           content: [
             {
               type: "text",
               text:
-                `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
-                (WEBHOOK_URL
-                  ? "Webhook notification sent."
-                  : "No webhook configured - changes not sent."),
-            },
-          ],
-        };
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Poll failed: ${error.message}`,
+                `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
+                `Webhook: ${WEBHOOK_URL || "Not configured"}\n\n` +
+                `Changes will be detected and sent to the webhook URL when found.`,
             },
           ],
         };
       }
-    }
 
-    if (name === "evernote_polling_status") {
+      if (action === "stop") {
+        stopPolling();
+        return {
+          content: [{ type: "text", text: "✅ Polling stopped" }],
+        };
+      }
+
+      if (action === "poll") {
+        try {
+          const changes = await pollOnce();
+          if (changes.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "✅ Poll complete - no changes detected",
+                },
+              ],
+            };
+          }
+
+          const changesSummary = changes
+            .map((c) => `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`)
+            .join("\n");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
+                  (WEBHOOK_URL
+                    ? "Webhook notification sent."
+                    : "No webhook configured - changes not sent."),
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            content: [
+              { type: "text", text: `❌ Poll failed: ${error.message}` },
+            ],
+          };
+        }
+      }
+
+      // action === "status"
       const status = getPollingStatus();
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(status, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
       };
     }
 

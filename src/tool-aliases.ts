@@ -51,6 +51,24 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
     }),
     sampleArgs: { noteGuid: 'n1' },
   },
+
+  // Polling 4 -> 1 (PR 2): evernote_polling({ action }).
+  evernote_start_polling: {
+    canonical: 'evernote_polling',
+    mapArgs: () => ({ action: 'start' }),
+  },
+  evernote_stop_polling: {
+    canonical: 'evernote_polling',
+    mapArgs: () => ({ action: 'stop' }),
+  },
+  evernote_poll_now: {
+    canonical: 'evernote_polling',
+    mapArgs: () => ({ action: 'poll' }),
+  },
+  evernote_polling_status: {
+    canonical: 'evernote_polling',
+    mapArgs: () => ({ action: 'status' }),
+  },
 };
 
 export interface ResolvedTool {

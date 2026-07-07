@@ -133,6 +133,10 @@ export const HealthCheckSchema = z.object({
   verbose: z.boolean().optional().default(false),
 });
 
+export const PollingSchema = z.object({
+  action: z.enum(['start', 'stop', 'poll', 'status']),
+});
+
 // Map tool names to their schemas
 export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_create_note: CreateNoteSchema,
@@ -150,6 +154,7 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_update_tag: UpdateTagSchema,
   evernote_patch_note: PatchNoteSchema,
   evernote_health_check: HealthCheckSchema,
+  evernote_polling: PollingSchema,
 };
 
 /**
