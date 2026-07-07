@@ -40,10 +40,16 @@ export const GetNoteSchema = z.object({
     (data.guids ? false : true),
 }));
 
-export const GetResourceTextSchema = z.object({
-  resourceGuid: z.string().min(1, 'Resource GUID is required'),
+const NoteReplacementSchema = z.object({
+  find: z.string().min(1, 'Find string must not be empty'),
+  replace: z.string(),
+  replaceAll: z.boolean().optional().default(true),
 });
 
+// update_note has two modes: a full-field update (title/content/tags/notebook)
+// or, when `replacements` is present, a targeted find-and-replace patch that
+// leaves title/tags/notebook/attachments untouched. The two are mutually
+// exclusive.
 export const UpdateNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   title: z.string().optional(),
@@ -52,13 +58,45 @@ export const UpdateNoteSchema = z.object({
   tags: z.array(z.string()).optional(),
   forceUpdate: z.boolean().optional().default(false),
   forceUpdateConfirmation: z.string().optional(),
-}).refine(
-  data => !data.forceUpdate || data.forceUpdateConfirmation === 'I understand this will delete the original note',
-  {
-    message: 'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
-    path: ['forceUpdateConfirmation'],
-  },
-);
+  replacements: z.array(NoteReplacementSchema).min(1, 'At least one replacement is required').optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.forceUpdate &&
+    data.forceUpdateConfirmation !== 'I understand this will delete the original note'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['forceUpdateConfirmation'],
+      message:
+        'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
+    });
+  }
+  if (
+    data.replacements &&
+    (data.title !== undefined ||
+      data.content !== undefined ||
+      data.tags !== undefined ||
+      data.notebookName !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replacements'],
+      message:
+        'replacements (patch mode) cannot be combined with title, content, tags, or notebookName',
+    });
+  }
+  // Patch mode routes through patchNoteContent and never reaches the
+  // forceUpdate edit-lock fallback, so reject the combination rather than
+  // silently ignoring the destructive-retry request.
+  if (data.replacements && data.forceUpdate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['forceUpdate'],
+      message:
+        'forceUpdate is not supported in patch mode (replacements); omit it or use a full-field update',
+    });
+  }
+});
 
 export const DeleteNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
@@ -74,14 +112,23 @@ export const CreateTagSchema = z.object({
   parentTagName: z.string().optional(),
 });
 
+// get_resource projects one attachment through one of four views. Default
+// `text` is the agent-usual case; base64 `binary` must be requested explicitly.
+// `includeData` is a deprecated alias: true -> binary, false -> metadata.
 export const GetResourceSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
-  includeData: z.boolean().optional().default(true),
-});
-
-export const ListNoteResourcesSchema = z.object({
-  noteGuid: z.string().min(1, 'Note GUID is required'),
-});
+  as: z.enum(['text', 'binary', 'recognition', 'metadata']).optional(),
+  includeData: z.boolean().optional(),
+}).transform(data => ({
+  guid: data.guid,
+  as:
+    data.as ??
+    (data.includeData === undefined
+      ? 'text'
+      : data.includeData
+        ? 'binary'
+        : 'metadata'),
+}));
 
 export const AddResourceToNoteSchema = z.object({
   noteGuid: z.string().min(1, 'Note GUID is required'),
@@ -89,15 +136,18 @@ export const AddResourceToNoteSchema = z.object({
   filename: z.string().optional(),
 });
 
-export const GetResourceRecognitionSchema = z.object({
-  resourceGuid: z.string().min(1, 'Resource GUID is required'),
+// Retired but kept as a hidden, shape-exact legacy handler (see tool-aliases.ts).
+export const ListNoteResourcesSchema = z.object({
+  noteGuid: z.string().min(1, 'Note GUID is required'),
 });
 
-export const GetNotebookSchema = z.object({
-  name: z.string().optional(),
-  guid: z.string().optional(),
-}).refine(data => data.name || data.guid, {
-  message: 'Either name or guid must be provided',
+// list_notebooks lists all notebooks, or returns one (fresh, full detail) when
+// name or guid is given — absorbing the retired get_notebook. name/guid must be
+// non-empty when present so an empty-string lookup errors instead of silently
+// listing all.
+export const ListNotebooksSchema = z.object({
+  name: z.string().min(1, 'name must not be empty').optional(),
+  guid: z.string().min(1, 'guid must not be empty').optional(),
 });
 
 export const UpdateNotebookSchema = z.object({
@@ -106,11 +156,12 @@ export const UpdateNotebookSchema = z.object({
   stack: z.string().optional(),
 });
 
-export const GetTagSchema = z.object({
-  name: z.string().optional(),
-  guid: z.string().optional(),
-}).refine(data => data.name || data.guid, {
-  message: 'Either name or guid must be provided',
+// list_tags lists all tags, or returns one (fresh, full detail) when name or
+// guid is given — absorbing the retired get_tag. name/guid must be non-empty
+// when present so an empty-string lookup errors instead of silently listing all.
+export const ListTagsSchema = z.object({
+  name: z.string().min(1, 'name must not be empty').optional(),
+  guid: z.string().min(1, 'guid must not be empty').optional(),
 });
 
 export const UpdateTagSchema = z.object({
@@ -119,16 +170,12 @@ export const UpdateTagSchema = z.object({
   parentTagName: z.string().optional(),
 });
 
-export const PatchNoteSchema = z.object({
-  guid: z.string().min(1, 'GUID is required'),
-  replacements: z.array(z.object({
-    find: z.string().min(1, 'Find string must not be empty'),
-    replace: z.string(),
-    replaceAll: z.boolean().optional().default(true),
-  })).min(1, 'At least one replacement is required'),
+export const PollingSchema = z.object({
+  action: z.enum(['start', 'stop', 'poll', 'status']),
 });
 
-export const HealthCheckSchema = z.object({
+export const ConnectionSchema = z.object({
+  action: z.enum(['status', 'user', 'reconnect', 'revoke']),
   verbose: z.boolean().optional().default(false),
 });
 
@@ -142,16 +189,14 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_create_notebook: CreateNotebookSchema,
   evernote_create_tag: CreateTagSchema,
   evernote_get_resource: GetResourceSchema,
-  evernote_list_note_resources: ListNoteResourcesSchema,
   evernote_add_resource_to_note: AddResourceToNoteSchema,
-  evernote_get_resource_recognition: GetResourceRecognitionSchema,
-  evernote_get_notebook: GetNotebookSchema,
+  evernote_list_note_resources: ListNoteResourcesSchema,
+  evernote_list_notebooks: ListNotebooksSchema,
   evernote_update_notebook: UpdateNotebookSchema,
-  evernote_get_tag: GetTagSchema,
+  evernote_list_tags: ListTagsSchema,
   evernote_update_tag: UpdateTagSchema,
-  evernote_patch_note: PatchNoteSchema,
-  evernote_health_check: HealthCheckSchema,
-  evernote_get_resource_text: GetResourceTextSchema,
+  evernote_polling: PollingSchema,
+  evernote_connection: ConnectionSchema,
 };
 
 /**
@@ -165,5 +210,9 @@ export function validateToolArgs(toolName: string, args: unknown): any {
     // No schema for this tool (e.g. list tools with no args) - pass through
     return args;
   }
-  return schema.parse(args);
+  // MCP clients may omit `arguments` entirely for a zero-arg call (e.g. the
+  // list-all form of list_notebooks/list_tags). Coerce that to {} so object
+  // schemas apply their optional-field defaults instead of rejecting undefined;
+  // schemas with required fields still error with a proper "required" message.
+  return schema.parse(args ?? {});
 }

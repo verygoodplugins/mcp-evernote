@@ -102,11 +102,11 @@ When changes are detected, a POST request is sent to your webhook URL:
 
 #### Manual Control
 
-Use these tools to control polling:
-- `evernote_start_polling` - Start polling manually
-- `evernote_stop_polling` - Stop polling
-- `evernote_poll_now` - Check for changes immediately
-- `evernote_polling_status` - Get polling configuration and status
+Use the `evernote_polling` tool to control polling:
+- `polling({action:"start"})` - Start polling manually
+- `polling({action:"stop"})` - Stop polling
+- `polling({action:"poll"})` - Check for changes immediately
+- `polling({action:"status"})` - Get polling configuration and status
 
 ### Evernote Webhooks (Real-time)
 
@@ -371,6 +371,14 @@ EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 
 ## Available Tools
 
+The server exposes **15 tools** (consolidated from 27). Retired tool names still
+work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true`
+— see [MIGRATION.md](MIGRATION.md) for the full old→new mapping. Highlights:
+`get_resource({guid, as})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
+`list_notebooks`/`list_tags` return one entity when passed a `name`/`guid`;
+`update_note` takes `replacements[]` for patch-style edits; and the `polling`
+and `connection` tools dispatch on an `action`.
+
 ## Markdown Support
 
 This server automatically converts between Markdown and Evernote's ENML format:
@@ -438,13 +446,19 @@ Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 > Returned Markdown represents embedded resources with `evernote-resource:<hash>` URLs. Leave those references intact so attachments stay linked when you edit the note.
 
 #### `evernote_update_note`
-Update an existing note.
+Update an existing note. Two mutually exclusive modes:
 
-**Parameters:**
+**Full-update mode parameters:**
 - `guid` (required): Note GUID
 - `title` (optional): New title
-- `content` (optional): New content
+- `content` (optional): New content (Markdown supported)
+- `notebookName` (optional): Move the note to this notebook
 - `tags` (optional): New tags (replaces existing)
+
+**Patch mode parameter** (replaces the old `evernote_patch_note`):
+- `replacements` (optional): Array of `{find, replace, replaceAll?}` find-and-replace
+  edits applied to the note body, preserving title, tags, notebook, and
+  attachments. Cannot be combined with the full-update fields above.
 
 #### `evernote_delete_note`
 Delete a note.
@@ -455,7 +469,8 @@ Delete a note.
 ### Notebook Operations
 
 #### `evernote_list_notebooks`
-List all notebooks in your account.
+List all notebooks in your account, or get one notebook's full detail by passing
+its `name` or `guid` (absorbs the old `evernote_get_notebook`).
 
 #### `evernote_create_notebook`
 Create a new notebook.
@@ -467,7 +482,8 @@ Create a new notebook.
 ### Tag Operations
 
 #### `evernote_list_tags`
-List all tags in your account.
+List all tags in your account, or get one tag's full detail by passing its
+`name` or `guid` (absorbs the old `evernote_get_tag`).
 
 #### `evernote_create_tag`
 Create a new tag.
@@ -476,74 +492,40 @@ Create a new tag.
 - `name` (required): Tag name
 - `parentTagName` (optional): Parent tag for hierarchy
 
-### Account Operations
+### Connection & Account
 
-#### `evernote_get_user_info`
-Get current user information and quota usage.
+#### `evernote_connection`
+Manage the Evernote connection and account. Dispatches on `action`
+(replaces the old `health_check`, `get_user_info`, `reconnect`, `revoke_auth`):
 
-#### `evernote_revoke_auth`
-Revoke stored authentication token.
-
-### Diagnostic Operations
-
-#### `evernote_health_check`
-Check the health and status of the Evernote MCP server.
-
-**Parameters:**
-- `verbose` (optional): Include detailed diagnostic information (default: false)
-
-**Returns:**
-- Server status (healthy, unhealthy, needs_auth, etc.)
-- Authentication status
-- Token information (when verbose)
-- Configuration details
+- `action:"status"` — health/diagnostic check (server + auth state). Pass
+  `verbose:true` for detailed diagnostics.
+- `action:"user"` — current user information and quota usage.
+- `action:"reconnect"` — force reconnection (useful on "Not connected" errors).
+- `action:"revoke"` — revoke the stored authentication token.
 
 **Example:**
 ```
 Check Evernote connection health with verbose details
 ```
 
-#### `evernote_reconnect`
-Force reconnection to Evernote. Useful when experiencing "Not connected" errors.
-
-**Use this when:**
-- You see "Not connected" errors
-- You've just refreshed your token
-- The server seems stuck in a failed state
-
-**Example:**
-```
-Reconnect to Evernote
-```
-
 ### Polling Operations
 
-#### `evernote_start_polling`
-Start polling for Evernote changes. Checks for new/updated/deleted notes and sends notifications to the configured webhook URL.
+#### `evernote_polling`
+Manage background polling for changes (detected changes are sent to the
+configured webhook). Dispatches on `action` (replaces the old `start_polling`,
+`stop_polling`, `poll_now`, `polling_status`):
+
+- `action:"start"` — begin polling on the configured interval.
+- `action:"stop"` — halt polling.
+- `action:"poll"` — check for changes immediately; returns detected changes.
+- `action:"status"` — current polling configuration and state (running, interval,
+  webhook URL, last poll time, error count).
 
 **Example:**
 ```
 Start polling for Evernote changes
 ```
-
-#### `evernote_stop_polling`
-Stop the polling process.
-
-#### `evernote_poll_now`
-Check for changes immediately without waiting for the next poll interval. Returns a list of detected changes.
-
-**Example:**
-```
-Check for Evernote changes now
-```
-
-#### `evernote_polling_status`
-Get the current polling configuration and status, including:
-- Whether polling is running
-- Poll interval
-- Configured webhook URL
-- Last poll time
-- Error count
 
 ## Search Syntax
 

@@ -12,6 +12,7 @@ import { EvernoteOAuth } from "./oauth.js";
 import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
+import { resolveToolAlias } from "./tool-aliases.js";
 import { computeWebhookSignature } from "./webhook.js";
 import { buildToolErrorPayload, getEvernoteErrorMeta } from "./errors.js";
 import {
@@ -86,6 +87,11 @@ const POLL_INTERVAL = Math.max(
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
 const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
 const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
+
+// When true, re-advertise retired tool names in ListTools for discover-by-list
+// clients during the deprecation window. Retired names always stay callable via
+// TOOL_ALIASES regardless of this flag — it only controls visibility.
+const LEGACY_TOOLS_ENABLED = process.env.EVERNOTE_LEGACY_TOOLS === "true";
 
 // NoteStore RPC transport tuning. Bounding concurrency keeps a wide fan-out
 // from bursting past Evernote's hourly rate limit; short waits auto-retry.
@@ -749,7 +755,8 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_update_note",
-    description: "Update an existing note",
+    description:
+      "Update an existing note. Full-update mode: pass title/content/tags/notebookName to replace those fields. Patch mode: pass replacements[] to apply targeted find-and-replace edits while preserving title, tags, notebook, and attachments — ideal for small changes like a status or date. The two modes are mutually exclusive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -759,20 +766,44 @@ const tools: Tool[] = [
         },
         title: {
           type: "string",
-          description: "New title (optional)",
+          description: "New title (full-update mode)",
         },
         content: {
           type: "string",
-          description: "New content (optional, Markdown supported)",
+          description: "New content (full-update mode, Markdown supported)",
         },
         notebookName: {
           type: "string",
-          description: "Move note to this notebook (optional)",
+          description: "Move note to this notebook (full-update mode)",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "New tags (replaces existing tags)",
+          description: "New tags, replacing existing tags (full-update mode)",
+        },
+        replacements: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              find: {
+                type: "string",
+                description: "Text to find (exact match)",
+              },
+              replace: {
+                type: "string",
+                description: "Replacement text",
+              },
+              replaceAll: {
+                type: "boolean",
+                description: "Replace all occurrences (default: true)",
+                default: true,
+              },
+            },
+            required: ["find", "replace"],
+          },
+          description:
+            "Patch mode: find-and-replace operations to apply. Mutually exclusive with title/content/tags/notebookName.",
         },
         forceUpdate: {
           type: "boolean",
@@ -805,10 +836,20 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_notebooks",
-    description: "List all notebooks",
+    description:
+      "List all notebooks, or get one notebook's full detail by passing its name or guid.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        name: {
+          type: "string",
+          description: "If set, return just this notebook (looked up by name).",
+        },
+        guid: {
+          type: "string",
+          description: "If set, return just this notebook (looked up by GUID).",
+        },
+      },
     },
   },
   {
@@ -831,10 +872,20 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_tags",
-    description: "List all tags",
+    description:
+      "List all tags, or get one tag's full detail by passing its name or guid.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        name: {
+          type: "string",
+          description: "If set, return just this tag (looked up by name).",
+        },
+        guid: {
+          type: "string",
+          description: "If set, return just this tag (looked up by GUID).",
+        },
+      },
     },
   },
   {
@@ -856,82 +907,48 @@ const tools: Tool[] = [
     },
   },
   {
-    name: "evernote_get_user_info",
-    description: "Get current user information and quota",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_revoke_auth",
-    description: "Revoke stored authentication token",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_health_check",
-    description: "Check the health and status of the Evernote MCP server",
+    name: "evernote_connection",
+    description:
+      'Manage the Evernote connection and account. action: "status" runs a health/diagnostic check (auth state, config), "user" returns the account profile + quota, "reconnect" forces reinitialization (useful when "Not connected" errors persist), "revoke" clears the stored auth token.',
     inputSchema: {
       type: "object",
       properties: {
+        action: {
+          type: "string",
+          enum: ["status", "user", "reconnect", "revoke"],
+          description: "Connection/account operation to perform.",
+        },
         verbose: {
           type: "boolean",
-          description: "Include detailed diagnostic information",
+          description:
+            'With action:"status", include detailed diagnostics (default: false).',
           default: false,
         },
       },
+      required: ["action"],
     },
   },
   {
-    name: "evernote_reconnect",
+    name: "evernote_polling",
     description:
-      'Force reconnection to Evernote (useful when "Not connected" errors persist)',
+      'Manage background polling for Evernote changes (detected changes are sent to the configured webhook). action: "start" begins polling, "stop" halts it, "poll" checks once immediately, "status" returns the current polling configuration and state.',
     inputSchema: {
       type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_start_polling",
-    description:
-      "Start polling for Evernote changes. Checks for new/updated notes and sends notifications to configured webhook URL.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_stop_polling",
-    description: "Stop polling for Evernote changes",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_poll_now",
-    description:
-      "Check for Evernote changes immediately without waiting for next poll interval",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_polling_status",
-    description: "Get the current polling configuration and status",
-    inputSchema: {
-      type: "object",
-      properties: {},
+      properties: {
+        action: {
+          type: "string",
+          enum: ["start", "stop", "poll", "status"],
+          description: "Polling operation to perform.",
+        },
+      },
+      required: ["action"],
     },
   },
   // Resource tools
   {
     name: "evernote_get_resource",
-    description: "Download a resource (attachment) by its GUID",
+    description:
+      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -939,27 +956,15 @@ const tools: Tool[] = [
           type: "string",
           description: "Resource GUID",
         },
-        includeData: {
-          type: "boolean",
-          description: "Include binary data as base64 (default: true)",
-          default: true,
+        as: {
+          type: "string",
+          enum: ["text", "binary", "recognition", "metadata"],
+          description:
+            "View to return (default: text). binary = base64 body; recognition = OCR data; metadata = info without the body.",
+          default: "text",
         },
       },
       required: ["guid"],
-    },
-  },
-  {
-    name: "evernote_list_note_resources",
-    description: "List all resources (attachments) in a note",
-    inputSchema: {
-      type: "object",
-      properties: {
-        noteGuid: {
-          type: "string",
-          description: "Note GUID",
-        },
-      },
-      required: ["noteGuid"],
     },
   },
   {
@@ -984,53 +989,7 @@ const tools: Tool[] = [
       required: ["noteGuid", "filePath"],
     },
   },
-  {
-    name: "evernote_get_resource_recognition",
-    description: "Get OCR/text recognition data from an image resource",
-    inputSchema: {
-      type: "object",
-      properties: {
-        resourceGuid: {
-          type: "string",
-          description: "Resource GUID",
-        },
-      },
-      required: ["resourceGuid"],
-    },
-  },
-  {
-    name: "evernote_get_resource_text",
-    description:
-      "Extract plain text from a resource attachment. Supports PDF text layers and Evernote OCR recognition for images. Returns the text content or an explanatory message if extraction is unavailable.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        resourceGuid: {
-          type: "string",
-          description: "Resource GUID of the attachment",
-        },
-      },
-      required: ["resourceGuid"],
-    },
-  },
-  // Notebook get/update tools
-  {
-    name: "evernote_get_notebook",
-    description: "Get notebook details by name or GUID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Notebook name",
-        },
-        guid: {
-          type: "string",
-          description: "Notebook GUID",
-        },
-      },
-    },
-  },
+  // Notebook update tool
   {
     name: "evernote_update_notebook",
     description: "Update notebook name or stack",
@@ -1053,24 +1012,7 @@ const tools: Tool[] = [
       required: ["guid"],
     },
   },
-  // Tag get/update tools
-  {
-    name: "evernote_get_tag",
-    description: "Get tag details by name or GUID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Tag name",
-        },
-        guid: {
-          type: "string",
-          description: "Tag GUID",
-        },
-      },
-    },
-  },
+  // Tag update tool
   {
     name: "evernote_update_tag",
     description: "Update tag name or parent",
@@ -1093,31 +1035,148 @@ const tools: Tool[] = [
       required: ["guid"],
     },
   },
-  // Patch note tool for targeted find-and-replace updates
+];
+
+// List tools handler — injects live notebook names into descriptions when available
+// Retired tool names re-advertised only when EVERNOTE_LEGACY_TOOLS=true. Each
+// stays callable via TOOL_ALIASES regardless; this array only controls
+// discover-by-list visibility during the deprecation window.
+const legacyTools: Tool[] = [
   {
-    name: "evernote_patch_note",
+    name: "evernote_list_note_resources",
     description:
-      "Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.",
+      "[DEPRECATED — use evernote_get_note; its resources[] lists attachments] List all resources (attachments) in a note.",
     inputSchema: {
       type: "object",
       properties: {
-        guid: {
+        noteGuid: { type: "string", description: "Note GUID" },
+      },
+      required: ["noteGuid"],
+    },
+  },
+  {
+    name: "evernote_get_resource_recognition",
+    description:
+      "[DEPRECATED — use evernote_get_resource with as:\"recognition\"] Get OCR/text recognition data from an image resource.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resourceGuid: { type: "string", description: "Resource GUID" },
+      },
+      required: ["resourceGuid"],
+    },
+  },
+  {
+    name: "evernote_get_resource_text",
+    description:
+      "[DEPRECATED — use evernote_get_resource with as:\"text\"] Extract plain text from a resource attachment (PDF text layers and Evernote OCR for images).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resourceGuid: {
           type: "string",
-          description: "Note GUID",
+          description: "Resource GUID of the attachment",
         },
+      },
+      required: ["resourceGuid"],
+    },
+  },
+  {
+    name: "evernote_start_polling",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"start"] Start polling for Evernote changes.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_stop_polling",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"stop"] Stop polling for Evernote changes.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_poll_now",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"poll"] Check for Evernote changes immediately.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_polling_status",
+    description:
+      '[DEPRECATED — use evernote_polling with action:"status"] Get the current polling configuration and status.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_get_user_info",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"user"] Get current user information and quota.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_revoke_auth",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"revoke"] Revoke stored authentication token.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_health_check",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"status"] Check the health and status of the Evernote MCP server.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        verbose: {
+          type: "boolean",
+          description: "Include detailed diagnostic information",
+          default: false,
+        },
+      },
+    },
+  },
+  {
+    name: "evernote_reconnect",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"reconnect"] Force reconnection to Evernote.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_get_notebook",
+    description:
+      "[DEPRECATED — use evernote_list_notebooks with name or guid] Get notebook details by name or GUID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Notebook name" },
+        guid: { type: "string", description: "Notebook GUID" },
+      },
+    },
+  },
+  {
+    name: "evernote_get_tag",
+    description:
+      "[DEPRECATED — use evernote_list_tags with name or guid] Get tag details by name or GUID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Tag name" },
+        guid: { type: "string", description: "Tag GUID" },
+      },
+    },
+  },
+  {
+    name: "evernote_patch_note",
+    description:
+      "[DEPRECATED — use evernote_update_note with replacements[]] Apply targeted find-and-replace edits to a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        guid: { type: "string", description: "Note GUID" },
         replacements: {
           type: "array",
           items: {
             type: "object",
             properties: {
-              find: {
-                type: "string",
-                description: "Text to find (exact match)",
-              },
-              replace: {
-                type: "string",
-                description: "Replacement text",
-              },
+              find: { type: "string", description: "Text to find (exact match)" },
+              replace: { type: "string", description: "Replacement text" },
               replaceAll: {
                 type: "boolean",
                 description: "Replace all occurrences (default: true)",
@@ -1134,7 +1193,6 @@ const tools: Tool[] = [
   },
 ];
 
-// List tools handler — injects live notebook names into descriptions when available
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   notebookCache = await resolveNotebookCacheForToolDescriptions({
     currentCache: notebookCache,
@@ -1144,12 +1202,54 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     logError: (message) => console.error(message),
   });
 
-  return { tools: enrichToolsWithNotebookDescriptions(tools, notebookCache) };
+  const advertised = LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools;
+  return { tools: enrichToolsWithNotebookDescriptions(advertised, notebookCache) };
 });
+
+// Retired tool names stay callable via TOOL_ALIASES; warn once per alias so a
+// long-lived server doesn't spam its log. stderr only — stdout is the MCP channel.
+const warnedAliases = new Set<string>();
+function warnDeprecatedAlias(oldName: string, canonical: string): void {
+  if (warnedAliases.has(oldName)) return;
+  warnedAliases.add(oldName);
+  console.error(
+    `[deprecation] Tool "${oldName}" is retired; routing to "${canonical}". ` +
+      `Update callers; set EVERNOTE_LEGACY_TOOLS=true to re-list retired names.`,
+  );
+}
 
 // Call tool handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  // Resolve a possibly-retired tool name to its canonical form BEFORE
+  // validation, so aliased calls validate against — and route to — the
+  // canonical handler. Non-aliased names pass through unchanged.
+  const resolved = resolveToolAlias(request.params.name, request.params.arguments);
+  const name = resolved.name;
+  const args = resolved.args;
+  if (resolved.aliased) {
+    warnDeprecatedAlias(request.params.name, name);
+  }
+
+  // Legacy input guard: preserve a retired tool's stricter "at least one of"
+  // requirement when its canonical target accepts fewer args (e.g. get_notebook
+  // required name|guid; list_notebooks treats neither as list-all).
+  if (resolved.requireOneOf) {
+    const raw = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const hasOne = resolved.requireOneOf.some(
+      (k) => raw[k] !== undefined && raw[k] !== null && raw[k] !== "",
+    );
+    if (!hasOne) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Validation error: ${request.params.name} requires one of: ${resolved.requireOneOf.join(", ")}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
 
   // Validate tool arguments against Zod schemas
   let validatedArgs: any;
@@ -1172,128 +1272,265 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    // Handle auth revocation specially
-    if (name === "evernote_revoke_auth") {
-      await oauth.revokeToken();
-      api = null;
-      apiInitError = null;
-      lastInitAttempt = 0;
-      clearEntityCaches();
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Authentication token revoked. You will need to re-authenticate on next use.",
-          },
-        ],
-      };
-    }
+    // Connection/account operations. revoke + reconnect need no live API and
+    // return here; status + user fall through to ensureAPI and the switch case
+    // below (preserving the old health_check/get_user_info gating exactly).
+    if (name === "evernote_connection") {
+      const { action, verbose = false } = validatedArgs;
 
-    // Handle reconnect specially
-    if (name === "evernote_reconnect") {
-      console.error("Force reconnect requested");
-      try {
-        await ensureAPI(true); // Force reinitialization
+      if (action === "revoke") {
+        await oauth.revokeToken();
+        api = null;
+        apiInitError = null;
+        lastInitAttempt = 0;
+        clearEntityCaches();
         return {
           content: [
             {
               type: "text",
-              text: "✅ Successfully reconnected to Evernote",
+              text: "Authentication token revoked. You will need to re-authenticate on next use.",
             },
           ],
         };
-      } catch (error: any) {
+      }
+
+      if (action === "reconnect") {
+        console.error("Force reconnect requested");
+        try {
+          await ensureAPI(true); // Force reinitialization
+          return {
+            content: [
+              {
+                type: "text",
+                text: "✅ Successfully reconnected to Evernote",
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
+              },
+            ],
+          };
+        }
+      }
+
+      // action === "status": health/diagnostic check. Handled here, before the
+      // global ensureAPI(), so it can report needs_auth / needs_setup for an
+      // unauthenticated server instead of erroring out. Self-contained: it
+      // probes tokens and attempts ensureAPI() internally.
+      if (action === "status") {
+        const healthStatus: any = {
+          server: {
+            name: "mcp-evernote",
+            version: "1.2.3",
+            status: "running",
+            environment: ENVIRONMENT,
+            timestamp: new Date().toISOString(),
+          },
+          configuration: {
+            consumerKeySet: !!CONSUMER_KEY,
+            consumerSecretSet: !!CONSUMER_SECRET,
+            environment: ENVIRONMENT,
+            isClaudeCode: oauth["isClaudeCode"],
+          },
+          authentication: {
+            status: "checking",
+            apiInitialized: !!api,
+            lastError: apiInitError,
+          },
+        };
+
+        try {
+          const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
+          const hasOAuthToken = !!process.env.OAUTH_TOKEN;
+
+          let hasTokenFile = false;
+          let tokenFileInfo: any = null;
+          try {
+            const fs = await import("fs/promises");
+            const path = await import("path");
+            const tokenPath = path.join(process.cwd(), ".evernote-token.json");
+            const tokenData = await fs.readFile(tokenPath, "utf-8");
+            const token = JSON.parse(tokenData);
+            hasTokenFile = true;
+            tokenFileInfo = {
+              exists: true,
+              hasToken: !!token.token,
+              hasNoteStoreUrl: !!token.noteStoreUrl,
+              userId: token.userId,
+              expires: token.expires
+                ? new Date(token.expires).toISOString()
+                : null,
+              isExpired: token.expires ? token.expires < Date.now() : false,
+            };
+          } catch (e) {
+            tokenFileInfo = { exists: false, error: (e as Error).message };
+          }
+
+          healthStatus.authentication = {
+            status: "checked",
+            apiInitialized: !!api,
+            hasEnvToken,
+            hasOAuthToken,
+            hasTokenFile,
+            tokenFileInfo: verbose ? tokenFileInfo : undefined,
+            lastError: apiInitError,
+          };
+
+          if (api) {
+            try {
+              const user = await api.getUser();
+              healthStatus.authentication.status = "authenticated";
+              healthStatus.authentication.user = {
+                id: user.id,
+                username: user.username,
+              };
+              healthStatus.status = "healthy";
+            } catch (e) {
+              healthStatus.authentication.status = "api_error";
+              healthStatus.authentication.apiError = (e as Error).message;
+              healthStatus.status = "unhealthy";
+            }
+          } else {
+            try {
+              await ensureAPI();
+              healthStatus.authentication.status = "authenticated";
+              healthStatus.authentication.apiInitialized = true;
+              healthStatus.status = "healthy";
+
+              try {
+                const user = await api!.getUser();
+                healthStatus.authentication.user = {
+                  id: user.id,
+                  username: user.username,
+                };
+              } catch (e) {
+                healthStatus.authentication.apiError = (e as Error).message;
+              }
+            } catch (e) {
+              healthStatus.authentication.status = "not_authenticated";
+              healthStatus.authentication.initError = (e as Error).message;
+              healthStatus.status = "needs_auth";
+            }
+          }
+        } catch (error: any) {
+          healthStatus.authentication.error = error.message;
+          healthStatus.status = "error";
+        }
+
+        if (verbose) {
+          healthStatus.diagnostics = {
+            cwd: process.cwd(),
+            nodeVersion: process.version,
+            platform: process.platform,
+            env: {
+              MCP_TRANSPORT: process.env.MCP_TRANSPORT || "not set",
+              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || "not set",
+              hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
+              hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
+            },
+          };
+        }
+
+        if (!healthStatus.status) {
+          if (healthStatus.authentication.status === "authenticated") {
+            healthStatus.status = "healthy";
+          } else if (
+            healthStatus.authentication.hasTokenFile ||
+            healthStatus.authentication.hasEnvToken ||
+            healthStatus.authentication.hasOAuthToken
+          ) {
+            healthStatus.status = "auth_issue";
+          } else {
+            healthStatus.status = "needs_setup";
+          }
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
+              text: JSON.stringify(healthStatus, null, 2),
             },
           ],
         };
       }
     }
 
-    // Handle polling tools
-    if (name === "evernote_start_polling") {
-      startPolling();
-      const status = getPollingStatus();
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
-              `Webhook: ${WEBHOOK_URL || "Not configured"}\n\n` +
-              `Changes will be detected and sent to the webhook URL when found.`,
-          },
-        ],
-      };
-    }
+    // Handle polling operations (no API needed — polling owns its own state).
+    if (name === "evernote_polling") {
+      const { action } = validatedArgs;
 
-    if (name === "evernote_stop_polling") {
-      stopPolling();
-      return {
-        content: [
-          {
-            type: "text",
-            text: "✅ Polling stopped",
-          },
-        ],
-      };
-    }
-
-    if (name === "evernote_poll_now") {
-      try {
-        const changes = await pollOnce();
-        if (changes.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "✅ Poll complete - no changes detected",
-              },
-            ],
-          };
-        }
-
-        const changesSummary = changes
-          .map((c) => `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`)
-          .join("\n");
-
+      if (action === "start") {
+        startPolling();
+        const status = getPollingStatus();
         return {
           content: [
             {
               type: "text",
               text:
-                `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
-                (WEBHOOK_URL
-                  ? "Webhook notification sent."
-                  : "No webhook configured - changes not sent."),
-            },
-          ],
-        };
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Poll failed: ${error.message}`,
+                `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
+                `Webhook: ${WEBHOOK_URL || "Not configured"}\n\n` +
+                `Changes will be detected and sent to the webhook URL when found.`,
             },
           ],
         };
       }
-    }
 
-    if (name === "evernote_polling_status") {
+      if (action === "stop") {
+        stopPolling();
+        return {
+          content: [{ type: "text", text: "✅ Polling stopped" }],
+        };
+      }
+
+      if (action === "poll") {
+        try {
+          const changes = await pollOnce();
+          if (changes.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "✅ Poll complete - no changes detected",
+                },
+              ],
+            };
+          }
+
+          const changesSummary = changes
+            .map((c) => `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`)
+            .join("\n");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
+                  (WEBHOOK_URL
+                    ? "Webhook notification sent."
+                    : "No webhook configured - changes not sent."),
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            content: [
+              { type: "text", text: `❌ Poll failed: ${error.message}` },
+            ],
+          };
+        }
+      }
+
+      // action === "status"
       const status = getPollingStatus();
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(status, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
       };
     }
 
@@ -1730,7 +1967,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           notebookName,
           tags,
           forceUpdate = false,
+          replacements,
         } = validatedArgs;
+
+        // Patch mode: targeted find-and-replace that preserves title, tags,
+        // notebook, and existing attachments (absorbs the retired patch_note).
+        if (replacements) {
+          const result = await evernoteApi.patchNoteContent(guid, replacements);
+          const changesSummary = result.changes
+            .map(
+              (c) =>
+                `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`,
+            )
+            .join("\n");
+
+          if (result.success) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
+              },
+            ],
+          };
+        }
 
         console.error(`Updating note ${guid}`);
 
@@ -1863,8 +2132,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "evernote_list_notebooks": {
-        const notebooks = await getCachedNotebooks(evernoteApi);
+        const { name, guid } = validatedArgs;
 
+        // Single-notebook lookup when name/guid is given (absorbs get_notebook).
+        if (name || guid) {
+          let notebook;
+          if (guid) {
+            notebook = await evernoteApi.getNotebook(guid);
+          } else {
+            const notebooks = await evernoteApi.listNotebooks();
+            notebook = notebooks.find((nb) => nb.name === name);
+            if (!notebook) {
+              throw new Error(`Notebook '${name}' not found`);
+            }
+            notebook = await evernoteApi.getNotebook(notebook.guid);
+          }
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(notebook, null, 2) },
+            ],
+          };
+        }
+
+        const notebooks = await getCachedNotebooks(evernoteApi);
         return {
           content: [
             {
@@ -1891,8 +2181,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "evernote_list_tags": {
-        const tags = await getCachedTags(evernoteApi);
+        const { name, guid } = validatedArgs;
 
+        // Single-tag lookup when name/guid is given (absorbs get_tag).
+        if (name || guid) {
+          let tag;
+          if (guid) {
+            tag = await evernoteApi.getTag(guid);
+          } else {
+            const tags = await evernoteApi.listTags();
+            tag = tags.find((t) => t.name === name);
+            if (!tag) {
+              throw new Error(`Tag '${name}' not found`);
+            }
+            tag = await evernoteApi.getTag(tag.guid!);
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify(tag, null, 2) }],
+          };
+        }
+
+        const tags = await getCachedTags(evernoteApi);
         return {
           content: [
             {
@@ -1929,38 +2238,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "evernote_get_user_info": {
-        const [user, quota] = await Promise.all([
-          evernoteApi.getUser(),
-          evernoteApi.getQuotaInfo(),
-        ]);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  user: {
-                    id: user.id,
-                    username: user.username,
-                    email: user.email,
-                    name: user.name,
-                  },
-                  quota: quota,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      }
-
       // Resource tools
       case "evernote_get_resource": {
-        const { guid, includeData = true } = validatedArgs;
-        const resource = await evernoteApi.getResource(guid, includeData);
+        const { guid, as } = validatedArgs;
+
+        if (as === "text") {
+          const text = await evernoteApi.extractResourceText(guid);
+          return { content: [{ type: "text", text }] };
+        }
+
+        if (as === "recognition") {
+          const recognition = await evernoteApi.getResourceRecognition(guid);
+          const allText = evernoteApi.extractTextFromRecognition(recognition);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ...recognition,
+                    extractedText: allText || "(no text recognized)",
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
+        // as: "binary" | "metadata" — both return resource info (incl. fileName
+        // via withAttributes). binary adds the base64 body; metadata adds
+        // hasRecognition (fetched without the body).
+        const withData = as === "binary";
+        const resource = await evernoteApi.getResource(
+          guid,
+          withData,
+          as === "metadata",
+          true,
+        );
 
         const result: any = {
           guid: resource.guid,
@@ -1972,7 +2288,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : "",
         };
 
-        if (includeData && resource.data?.body) {
+        if (as === "metadata") {
+          result.hasRecognition = !!resource.recognition;
+        }
+
+        if (withData && resource.data?.body) {
           result.data = Buffer.from(resource.data.body).toString("base64");
         }
 
@@ -1981,20 +2301,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case "evernote_list_note_resources": {
-        const { noteGuid } = validatedArgs;
-        const resources = await evernoteApi.listNoteResources(noteGuid);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(resources, null, 2),
             },
           ],
         };
@@ -2018,72 +2324,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "evernote_get_resource_recognition": {
-        const { resourceGuid } = validatedArgs;
-        const recognition =
-          await evernoteApi.getResourceRecognition(resourceGuid);
-
-        // Extract just the text for a summary
-        const allText = evernoteApi.extractTextFromRecognition(recognition);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  ...recognition,
-                  extractedText: allText || "(no text recognized)",
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      }
-
-      case "evernote_get_resource_text": {
-        const { resourceGuid } = validatedArgs;
-        const text = await evernoteApi.extractResourceText(resourceGuid);
+      // Retired from the default surface but preserved as a hidden, shape-exact
+      // legacy handler: its response is a top-level array (with hash +
+      // hasRecognition), which the get_note resources[] projection can't
+      // reproduce. New callers should use evernote_get_note.
+      case "evernote_list_note_resources": {
+        warnDeprecatedAlias(
+          "evernote_list_note_resources",
+          "evernote_get_note",
+        );
+        const { noteGuid } = validatedArgs;
+        const note = await evernoteApi.getNote(noteGuid, false, true);
+        const resources = (note.resources || []).map((r: any) => ({
+          guid: r.guid,
+          filename: r.attributes?.fileName,
+          mimeType: r.mime,
+          size: r.data?.size || 0,
+          hash: r.data?.bodyHash
+            ? Buffer.from(r.data.bodyHash).toString("hex")
+            : "",
+          hasRecognition: !!r.recognition,
+        }));
 
         return {
           content: [
-            {
-              type: "text",
-              text,
-            },
-          ],
-        };
-      }
-
-      // Notebook get/update tools
-      case "evernote_get_notebook": {
-        const { name, guid } = validatedArgs;
-
-        if (!name && !guid) {
-          throw new Error("Either name or guid must be provided");
-        }
-
-        let notebook;
-        if (guid) {
-          notebook = await evernoteApi.getNotebook(guid);
-        } else {
-          const notebooks = await evernoteApi.listNotebooks();
-          notebook = notebooks.find((nb) => nb.name === name);
-          if (!notebook) {
-            throw new Error(`Notebook '${name}' not found`);
-          }
-          // Get full notebook details
-          notebook = await evernoteApi.getNotebook(notebook.guid);
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(notebook, null, 2),
-            },
+            { type: "text", text: JSON.stringify(resources, null, 2) },
           ],
         };
       }
@@ -2107,37 +2372,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `✅ Notebook updated!\nGUID: ${updatedNotebook.guid}\nName: ${updatedNotebook.name}\nStack: ${updatedNotebook.stack || "(none)"}`,
-            },
-          ],
-        };
-      }
-
-      // Tag get/update tools
-      case "evernote_get_tag": {
-        const { name, guid } = validatedArgs;
-
-        if (!name && !guid) {
-          throw new Error("Either name or guid must be provided");
-        }
-
-        let tag;
-        if (guid) {
-          tag = await evernoteApi.getTag(guid);
-        } else {
-          const tags = await evernoteApi.listTags();
-          tag = tags.find((t) => t.name === name);
-          if (!tag) {
-            throw new Error(`Tag '${name}' not found`);
-          }
-          // Get full tag details
-          tag = await evernoteApi.getTag(tag.guid!);
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(tag, null, 2),
             },
           ],
         };
@@ -2176,202 +2410,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "evernote_patch_note": {
-        const { guid, replacements } = validatedArgs;
-
-        if (
-          !replacements ||
-          !Array.isArray(replacements) ||
-          replacements.length === 0
-        ) {
-          throw new Error("At least one replacement must be provided");
-        }
-
-        // Validate each replacement has a non-empty find string
-        for (const r of replacements) {
-          if (!r.find || typeof r.find !== "string" || r.find.length === 0) {
-            throw new Error(
-              'Each replacement must have a non-empty "find" string',
-            );
-          }
-        }
-
-        const result = await evernoteApi.patchNoteContent(guid, replacements);
-
-        // Format the response
-        const changesSummary = result.changes
-          .map(
-            (c) =>
-              `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`,
-          )
-          .join("\n");
-
-        if (result.success) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
-              },
-            ],
-          };
-        } else {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
-              },
-            ],
-          };
-        }
-      }
-
-      case "evernote_health_check": {
-        const { verbose = false } = validatedArgs;
-
-        // Basic server info
-        const healthStatus: any = {
-          server: {
-            name: "mcp-evernote",
-            version: "1.2.3",
-            status: "running",
-            environment: ENVIRONMENT,
-            timestamp: new Date().toISOString(),
-          },
-          configuration: {
-            consumerKeySet: !!CONSUMER_KEY,
-            consumerSecretSet: !!CONSUMER_SECRET,
-            environment: ENVIRONMENT,
-            isClaudeCode: oauth["isClaudeCode"],
-          },
-          authentication: {
-            status: "checking",
-            apiInitialized: !!api,
-            lastError: apiInitError,
-          },
-        };
-
-        // Try to check authentication status
-        try {
-          // Check if we have tokens without initializing API
-          const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
-          const hasOAuthToken = !!process.env.OAUTH_TOKEN;
-
-          // Try to load token file
-          let hasTokenFile = false;
-          let tokenFileInfo: any = null;
-          try {
-            const fs = await import("fs/promises");
-            const path = await import("path");
-            const tokenPath = path.join(process.cwd(), ".evernote-token.json");
-            const tokenData = await fs.readFile(tokenPath, "utf-8");
-            const token = JSON.parse(tokenData);
-            hasTokenFile = true;
-            tokenFileInfo = {
-              exists: true,
-              hasToken: !!token.token,
-              hasNoteStoreUrl: !!token.noteStoreUrl,
-              userId: token.userId,
-              expires: token.expires
-                ? new Date(token.expires).toISOString()
-                : null,
-              isExpired: token.expires ? token.expires < Date.now() : false,
-            };
-          } catch (e) {
-            tokenFileInfo = { exists: false, error: (e as Error).message };
-          }
-
-          healthStatus.authentication = {
-            status: "checked",
-            apiInitialized: !!api,
-            hasEnvToken,
-            hasOAuthToken,
-            hasTokenFile,
-            tokenFileInfo: verbose ? tokenFileInfo : undefined,
-            lastError: apiInitError,
-          };
-
-          // If API is already initialized, test it
-          if (api) {
-            try {
-              const user = await api.getUser();
-              healthStatus.authentication.status = "authenticated";
-              healthStatus.authentication.user = {
-                id: user.id,
-                username: user.username,
-              };
-              healthStatus.status = "healthy";
-            } catch (e) {
-              healthStatus.authentication.status = "api_error";
-              healthStatus.authentication.apiError = (e as Error).message;
-              healthStatus.status = "unhealthy";
-            }
-          } else {
-            // Try to initialize API if we haven't yet
-            try {
-              await ensureAPI();
-              healthStatus.authentication.status = "authenticated";
-              healthStatus.authentication.apiInitialized = true;
-              healthStatus.status = "healthy";
-
-              // Get user info if successful
-              try {
-                const user = await api!.getUser();
-                healthStatus.authentication.user = {
-                  id: user.id,
-                  username: user.username,
-                };
-              } catch (e) {
-                // API initialized but can't get user
-                healthStatus.authentication.apiError = (e as Error).message;
-              }
-            } catch (e) {
-              healthStatus.authentication.status = "not_authenticated";
-              healthStatus.authentication.initError = (e as Error).message;
-              healthStatus.status = "needs_auth";
-            }
-          }
-        } catch (error: any) {
-          healthStatus.authentication.error = error.message;
-          healthStatus.status = "error";
-        }
-
-        // Add diagnostic information if verbose
-        if (verbose) {
-          healthStatus.diagnostics = {
-            cwd: process.cwd(),
-            nodeVersion: process.version,
-            platform: process.platform,
-            env: {
-              MCP_TRANSPORT: process.env.MCP_TRANSPORT || "not set",
-              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || "not set",
-              hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
-              hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
-            },
-          };
-        }
-
-        // Overall status determination
-        if (!healthStatus.status) {
-          if (healthStatus.authentication.status === "authenticated") {
-            healthStatus.status = "healthy";
-          } else if (
-            healthStatus.authentication.hasTokenFile ||
-            healthStatus.authentication.hasEnvToken ||
-            healthStatus.authentication.hasOAuthToken
-          ) {
-            healthStatus.status = "auth_issue";
-          } else {
-            healthStatus.status = "needs_setup";
-          }
-        }
-
+      case "evernote_connection": {
+        // Only action "user" reaches the switch — status/reconnect/revoke are
+        // handled before ensureAPI() above so status can diagnose an
+        // unauthenticated state.
+        const [user, quota] = await Promise.all([
+          evernoteApi.getUser(),
+          evernoteApi.getQuotaInfo(),
+        ]);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(healthStatus, null, 2),
+              text: JSON.stringify(
+                {
+                  user: {
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    name: user.name,
+                  },
+                  quota: quota,
+                },
+                null,
+                2,
+              ),
             },
           ],
         };

@@ -25,40 +25,60 @@
       "description": "Create a new note in Evernote"
     },
     {
+      "name": "evernote_search_notes",
+      "description": "Search notes with Evernote query syntax (paged; optional full content)"
+    },
+    {
       "name": "evernote_get_note",
-      "description": "Get note content by GUID"
+      "description": "Get one note (full detail) or a batch of up to 25 by GUID"
     },
     {
       "name": "evernote_update_note",
-      "description": "Update an existing note"
+      "description": "Update a note (full-field, or patch mode via replacements[])"
     },
     {
       "name": "evernote_delete_note",
       "description": "Delete a note"
     },
     {
-      "name": "evernote_search_notes",
-      "description": "Search notes with Evernote query syntax"
-    },
-    {
       "name": "evernote_list_notebooks",
-      "description": "List all notebooks"
+      "description": "List notebooks, or get one by name/guid"
     },
     {
       "name": "evernote_create_notebook",
       "description": "Create a new notebook"
     },
     {
+      "name": "evernote_update_notebook",
+      "description": "Update notebook name or stack"
+    },
+    {
       "name": "evernote_list_tags",
-      "description": "List all tags"
+      "description": "List tags, or get one by name/guid"
     },
     {
       "name": "evernote_create_tag",
       "description": "Create a new tag"
     },
     {
-      "name": "evernote_get_user_info",
-      "description": "Get current user information"
+      "name": "evernote_update_tag",
+      "description": "Update tag name or parent"
+    },
+    {
+      "name": "evernote_get_resource",
+      "description": "Get an attachment by GUID, projected as text/binary/recognition/metadata"
+    },
+    {
+      "name": "evernote_add_resource_to_note",
+      "description": "Add a file/image attachment to a note"
+    },
+    {
+      "name": "evernote_polling",
+      "description": "Manage change polling (action: start/stop/poll/status)"
+    },
+    {
+      "name": "evernote_connection",
+      "description": "Connection and account (action: status/user/reconnect/revoke)"
     }
   ]
 }

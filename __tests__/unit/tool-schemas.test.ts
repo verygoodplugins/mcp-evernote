@@ -7,11 +7,12 @@ import {
   GetNoteSchema,
   UpdateNoteSchema,
   DeleteNoteSchema,
-  PatchNoteSchema,
-  GetNotebookSchema,
-  GetTagSchema,
+  ListNotebooksSchema,
+  ListTagsSchema,
   AddResourceToNoteSchema,
-  HealthCheckSchema,
+  GetResourceSchema,
+  ConnectionSchema,
+  PollingSchema,
   validateToolArgs,
 } from '../../src/tool-schemas';
 
@@ -133,6 +134,62 @@ describe('tool schemas (M1)', () => {
         UpdateNoteSchema.parse({ guid: 'abc-123', notebookName: '' }),
       ).toThrow(/Notebook name cannot be empty/);
     });
+
+    it('accepts a full-field update', () => {
+      const result = UpdateNoteSchema.parse({
+        guid: 'abc',
+        title: 'New',
+        tags: ['x'],
+      });
+      expect(result.title).toBe('New');
+    });
+
+    describe('patch mode (replacements)', () => {
+      it('rejects an empty replacements array', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({ guid: 'abc', replacements: [] }),
+        ).toThrow(/At least one replacement/);
+      });
+
+      it('rejects a replacement with an empty find', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            replacements: [{ find: '', replace: 'new' }],
+          }),
+        ).toThrow(/Find string must not be empty/);
+      });
+
+      it('defaults replaceAll to true', () => {
+        const result = UpdateNoteSchema.parse({
+          guid: 'abc',
+          replacements: [{ find: 'old', replace: 'new' }],
+        });
+        expect(result.replacements?.[0]?.replaceAll).toBe(true);
+      });
+
+      it('rejects combining replacements with full-field inputs', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            content: 'body',
+            replacements: [{ find: 'old', replace: 'new' }],
+          }),
+        ).toThrow(/cannot be combined/);
+      });
+
+      it('rejects combining replacements with forceUpdate', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            forceUpdate: true,
+            forceUpdateConfirmation:
+              'I understand this will delete the original note',
+            replacements: [{ find: 'old', replace: 'new' }],
+          }),
+        ).toThrow(/forceUpdate is not supported in patch mode/);
+      });
+    });
   });
 
   describe('DeleteNoteSchema', () => {
@@ -150,52 +207,36 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('PatchNoteSchema', () => {
-    it('rejects empty replacements array', () => {
-      expect(() =>
-        PatchNoteSchema.parse({ guid: 'abc', replacements: [] }),
-      ).toThrow(/At least one replacement/);
+
+  describe('ListNotebooksSchema', () => {
+    it('accepts empty args (list all)', () => {
+      expect(() => ListNotebooksSchema.parse({})).not.toThrow();
     });
 
-    it('rejects replacement with empty find', () => {
-      expect(() =>
-        PatchNoteSchema.parse({
-          guid: 'abc',
-          replacements: [{ find: '', replace: 'new' }],
-        }),
-      ).toThrow(/Find string must not be empty/);
-    });
-
-    it('accepts valid replacements', () => {
-      const result = PatchNoteSchema.parse({
-        guid: 'abc',
-        replacements: [{ find: 'old', replace: 'new' }],
-      });
-      expect(result.replacements[0].replaceAll).toBe(true);
-    });
-  });
-
-  describe('GetNotebookSchema', () => {
-    it('rejects when neither name nor guid provided', () => {
-      expect(() => GetNotebookSchema.parse({})).toThrow(
-        /Either name or guid/,
-      );
-    });
-
-    it('accepts name only', () => {
-      const result = GetNotebookSchema.parse({ name: 'My Notebook' });
+    it('accepts name only (single lookup)', () => {
+      const result = ListNotebooksSchema.parse({ name: 'My Notebook' });
       expect(result.name).toBe('My Notebook');
     });
 
-    it('accepts guid only', () => {
-      const result = GetNotebookSchema.parse({ guid: 'abc' });
+    it('accepts guid only (single lookup)', () => {
+      const result = ListNotebooksSchema.parse({ guid: 'abc' });
       expect(result.guid).toBe('abc');
+    });
+
+    it('rejects an empty-string name (would otherwise list-all)', () => {
+      expect(() => ListNotebooksSchema.parse({ name: '' })).toThrow(
+        /name must not be empty/,
+      );
     });
   });
 
-  describe('GetTagSchema', () => {
-    it('rejects when neither name nor guid provided', () => {
-      expect(() => GetTagSchema.parse({})).toThrow(/Either name or guid/);
+  describe('ListTagsSchema', () => {
+    it('accepts empty args (list all)', () => {
+      expect(() => ListTagsSchema.parse({})).not.toThrow();
+    });
+
+    it('accepts name only (single lookup)', () => {
+      expect(ListTagsSchema.parse({ name: 'important' }).name).toBe('important');
     });
   });
 
@@ -207,10 +248,68 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('HealthCheckSchema', () => {
+  describe('GetResourceSchema', () => {
+    it('defaults as to "text" when neither as nor includeData is given', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1' });
+      expect(result.as).toBe('text');
+    });
+
+    it('honors an explicit as view', () => {
+      expect(GetResourceSchema.parse({ guid: 'r1', as: 'recognition' }).as).toBe(
+        'recognition',
+      );
+    });
+
+    it('maps deprecated includeData:true to binary', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1', includeData: true });
+      expect(result.as).toBe('binary');
+    });
+
+    it('maps deprecated includeData:false to metadata', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1', includeData: false });
+      expect(result.as).toBe('metadata');
+    });
+
+    it('lets an explicit as win over includeData', () => {
+      const result = GetResourceSchema.parse({
+        guid: 'r1',
+        as: 'text',
+        includeData: true,
+      });
+      expect(result.as).toBe('text');
+    });
+
+    it('rejects an unknown as view', () => {
+      expect(() => GetResourceSchema.parse({ guid: 'r1', as: 'thumbnail' })).toThrow();
+    });
+  });
+
+  describe('ConnectionSchema', () => {
     it('defaults verbose to false', () => {
-      const result = HealthCheckSchema.parse({});
+      const result = ConnectionSchema.parse({ action: 'status' });
       expect(result.verbose).toBe(false);
+    });
+
+    it('accepts each action', () => {
+      for (const action of ['status', 'user', 'reconnect', 'revoke'] as const) {
+        expect(ConnectionSchema.parse({ action }).action).toBe(action);
+      }
+    });
+
+    it('rejects an unknown action', () => {
+      expect(() => ConnectionSchema.parse({ action: 'login' })).toThrow();
+    });
+  });
+
+  describe('PollingSchema', () => {
+    it('accepts each action', () => {
+      for (const action of ['start', 'stop', 'poll', 'status'] as const) {
+        expect(PollingSchema.parse({ action }).action).toBe(action);
+      }
+    });
+
+    it('rejects a missing action', () => {
+      expect(() => PollingSchema.parse({})).toThrow();
     });
   });
 
@@ -223,10 +322,20 @@ describe('tool schemas (M1)', () => {
       expect(result.title).toBe('Test');
     });
 
-    it('passes through for unknown tools', () => {
+    it('passes through for tools without a schema', () => {
       const args = { foo: 'bar' };
-      const result = validateToolArgs('evernote_list_notebooks', args);
+      const result = validateToolArgs('evernote_unregistered_tool', args);
       expect(result).toBe(args);
+    });
+
+    it('coerces omitted args to {} for zero-arg list calls', () => {
+      // MCP clients may omit `arguments` for the list-all form.
+      expect(() => validateToolArgs('evernote_list_notebooks', undefined)).not.toThrow();
+      expect(validateToolArgs('evernote_list_tags', undefined)).toEqual({});
+    });
+
+    it('still rejects omitted args when a field is required', () => {
+      expect(() => validateToolArgs('evernote_polling', undefined)).toThrow();
     });
 
     it('throws ZodError for invalid args', () => {
