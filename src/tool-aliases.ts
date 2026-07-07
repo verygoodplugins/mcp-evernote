@@ -19,6 +19,13 @@ export interface ToolAlias {
   /** Rewrites the retired tool's args into the canonical schema's shape. */
   mapArgs: (args: any) => any;
   /**
+   * Raw-arg keys of which at least one must be present. Preserves a legacy
+   * tool's stricter validation when the canonical target is more permissive
+   * (e.g. get_notebook required name|guid, but list_notebooks accepts neither
+   * as list-all). Checked against the original args before mapping.
+   */
+  requireOneOf?: string[];
+  /**
    * Representative old-shape args. Used by tool-aliases.test.ts to assert that
    * `mapArgs` output validates against the canonical tool's Zod schema.
    */
@@ -89,11 +96,13 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
   evernote_get_notebook: {
     canonical: 'evernote_list_notebooks',
     mapArgs: (a) => ({ name: a.name, guid: a.guid }),
+    requireOneOf: ['name', 'guid'],
     sampleArgs: { name: 'Finance' },
   },
   evernote_get_tag: {
     canonical: 'evernote_list_tags',
     mapArgs: (a) => ({ name: a.name, guid: a.guid }),
+    requireOneOf: ['name', 'guid'],
     sampleArgs: { name: 'important' },
   },
 
@@ -112,6 +121,8 @@ export interface ResolvedTool {
   args: unknown;
   /** True when `name` came from a retired alias. */
   aliased: boolean;
+  /** Legacy input guard (from the alias); at least one key must be present. */
+  requireOneOf?: string[];
 }
 
 /**
@@ -127,5 +138,10 @@ export function resolveToolAlias(
   if (!alias) {
     return { name, args, aliased: false };
   }
-  return { name: alias.canonical, args: alias.mapArgs(args ?? {}), aliased: true };
+  return {
+    name: alias.canonical,
+    args: alias.mapArgs(args ?? {}),
+    aliased: true,
+    requireOneOf: alias.requireOneOf,
+  };
 }

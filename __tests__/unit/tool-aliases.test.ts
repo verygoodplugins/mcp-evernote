@@ -44,6 +44,22 @@ describe('tool-aliases', () => {
       expect(r.args).toEqual({ action: 'status' });
     });
 
+    it('surfaces requireOneOf from the matched alias', () => {
+      const withGuard: Record<string, ToolAlias> = {
+        old_get: {
+          canonical: 'evernote_list_notebooks',
+          mapArgs: (a: any) => ({ name: a.name, guid: a.guid }),
+          requireOneOf: ['name', 'guid'],
+        },
+      };
+      expect(resolveToolAlias('old_get', {}, withGuard).requireOneOf).toEqual([
+        'name',
+        'guid',
+      ]);
+      // Non-aliased and guard-less aliases carry no requireOneOf.
+      expect(resolveToolAlias('evernote_get_note', {}, withGuard).requireOneOf).toBeUndefined();
+    });
+
     it('defaults to the production TOOL_ALIASES map when none is passed', () => {
       // Production map is empty in PR 0, so every name resolves to itself.
       const r = resolveToolAlias('evernote_create_note', { title: 't', content: 'c' });

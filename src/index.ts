@@ -1230,6 +1230,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     warnDeprecatedAlias(request.params.name, name);
   }
 
+  // Legacy input guard: preserve a retired tool's stricter "at least one of"
+  // requirement when its canonical target accepts fewer args (e.g. get_notebook
+  // required name|guid; list_notebooks treats neither as list-all).
+  if (resolved.requireOneOf) {
+    const raw = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const hasOne = resolved.requireOneOf.some(
+      (k) => raw[k] !== undefined && raw[k] !== null && raw[k] !== "",
+    );
+    if (!hasOne) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Validation error: ${request.params.name} requires one of: ${resolved.requireOneOf.join(", ")}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
   // Validate tool arguments against Zod schemas
   let validatedArgs: any;
   try {
