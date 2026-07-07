@@ -79,6 +79,8 @@ let api: EvernoteAPI | null = null;
 
 // Notebook cache - populated after first successful API init
 let notebookCache: NotebookInfo[] | null = null;
+let notebookCacheAt = 0;
+const NOTEBOOK_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
@@ -106,12 +108,25 @@ function canExtractAttachmentText(resource: any): boolean {
 async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
+    notebookCacheAt = Date.now();
     console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
     return notebookCache;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
     return notebookCache;
   }
+}
+
+// Notebooks change rarely; serve repeated reads from an in-memory TTL cache so we
+// don't hit the Evernote API on every list_notebooks/get_note call (which, under
+// concurrency, was rate-limiting/failing and returning an empty list).
+async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInfo[]> {
+  const now = Date.now();
+  if (notebookCache !== null && now - notebookCacheAt < NOTEBOOK_CACHE_TTL_MS) {
+    return notebookCache;
+  }
+  const refreshed = await refreshNotebookCache(evernoteApi);
+  return refreshed ?? notebookCache ?? [];
 }
 
 async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
@@ -1152,6 +1167,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           updated: new Date(note.updated).toISOString(),
         };
 
+        // Surface the containing notebook so callers don't need a separate
+        // list_notebooks round-trip just to know where a note lives.
+        if (note.notebookGuid) {
+          result.notebookGuid = note.notebookGuid;
+          try {
+            const notebooks = await getCachedNotebooks(evernoteApi);
+            const nb = notebooks.find(n => n.guid === note.notebookGuid);
+            if (nb) {
+              result.notebookName = nb.name;
+            }
+          } catch {
+            // notebookName is best-effort; never fail get_note over it.
+          }
+        }
+
         if (includeContent && note.content) {
           result.content = evernoteApi.convertENMLToMarkdown(note.content, note.resources);
         }
@@ -1319,7 +1349,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'evernote_list_notebooks': {
-        const notebooks = await evernoteApi.listNotebooks();
+        const notebooks = await getCachedNotebooks(evernoteApi);
 
         return {
           content: [
@@ -1850,9 +1880,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     const timestamp = new Date().toISOString();
 
-    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}`);
+    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}${error.rateLimitDuration ? ` rateLimitDuration=${error.rateLimitDuration}s` : ''}`);
 
-    // Return error information without sensitive data
+    // Return error information without sensitive data. Surface Evernote's
+    // rateLimitDuration (SECONDS) on rate-limit errors (errorCode 19) so callers
+    // can back off for the exact window instead of guessing.
     return {
       content: [
         {
@@ -1860,7 +1892,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: `Tool execution failed: ${name}\n\n` +
                 `Error: ${error.message}\n` +
                 `Timestamp: ${timestamp}` +
-                (error.errorCode ? `\nError code: ${error.errorCode}` : ''),
+                (error.errorCode ? `\nError code: ${error.errorCode}` : '') +
+                (error.rateLimitDuration ? `\nRate limit duration: ${error.rateLimitDuration}s` : ''),
         },
       ],
       isError: true,
