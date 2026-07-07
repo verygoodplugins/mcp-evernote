@@ -101,6 +101,32 @@ describe("EvernoteAPI note cache", () => {
     expect(getNote).toHaveBeenCalledTimes(2);
   });
 
+  it("re-fetches a batch note when a caller-known USN is newer than the cached body", async () => {
+    let calls = 0;
+    const getNote = jest.fn(async (guid: string) => {
+      calls += 1;
+      return noteFixture(guid, calls === 1 ? 5 : 9);
+    });
+    const getSyncState = jest.fn(async () => ({ updateCount: 10 }));
+    const api = makeApi({
+      getNote,
+      getSyncState,
+      getFilteredSyncChunk: jest.fn(),
+    });
+
+    // Prime the cache at USN 5.
+    await api.getNotesBatch(["g1"], { includeContent: true, format: "text" });
+    // A later search read knows g1 is now at USN 9 → the USN-5 body is evicted
+    // and re-fetched rather than served stale alongside fresh metadata.
+    await api.getNotesBatch(["g1"], {
+      includeContent: true,
+      format: "text",
+      knownUsns: new Map([["g1", 9]]),
+    });
+
+    expect(getNote).toHaveBeenCalledTimes(2);
+  });
+
   it("drops a cached note after an external edit is detected via sync", async () => {
     let now = 1000;
     let updateCount = 10;

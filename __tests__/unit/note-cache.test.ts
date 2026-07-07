@@ -37,7 +37,7 @@ describe("NoteCache get/set", () => {
     expect(cache.get("a", false)).toBeTruthy();
   });
 
-  it("hands back a resource-free view when a resourced entry is read without resources", () => {
+  it("preserves resource metadata on a hit read without resources", () => {
     const cache = new NoteCache({ maxEntries: 10 });
     const withRes: any = {
       ...note("a", 1),
@@ -45,14 +45,29 @@ describe("NoteCache get/set", () => {
     };
     cache.set("a", withRes, true);
 
-    // Read WITH resources → full note.
-    expect(cache.get("a", true).resources).toHaveLength(1);
-    // Read WITHOUT resources → resources omitted (honors includeAttachmentText:false).
-    const view = cache.get("a", false);
-    expect(view.resources).toBeUndefined();
-    expect(view.content).toBe(withRes.content);
-    // The stored entry keeps its resources for later resource reads.
-    expect(cache.get("a", true).resources).toHaveLength(1);
+    // Only bodies are stripped — resource metadata stays so content rendering
+    // (attachment filenames/mime) and listings are consistent regardless of
+    // which read primed the cache.
+    const hit = cache.get("a", false);
+    expect(hit.resources).toHaveLength(1);
+    expect(hit.resources[0].guid).toBe("r1");
+    expect(hit.resources[0].mime).toBe("image/png");
+  });
+
+  it("evicts and misses a cached body older than a caller-known USN", () => {
+    const cache = new NoteCache({ maxEntries: 10 });
+    cache.set("a", note("a", 5), false); // cached at USN 5
+    // Caller read fresh metadata: the note is now at USN 8, so the USN-5 body
+    // is stale and must not be served.
+    expect(cache.get("a", false, 8)).toBeUndefined();
+    // The stale entry was evicted, so a follow-up read also misses.
+    expect(cache.get("a", false)).toBeUndefined();
+  });
+
+  it("serves a cached body whose USN already matches the caller-known USN", () => {
+    const cache = new NoteCache({ maxEntries: 10 });
+    cache.set("a", note("a", 8), false);
+    expect(cache.get("a", false, 8)).toBeTruthy(); // usn 8 is not older than 8
   });
 
   it("strips resource binaries and recognition before caching", () => {
@@ -74,11 +89,14 @@ describe("NoteCache get/set", () => {
     expect(hit.resources[0].data.body).toBeUndefined();
     expect(hit.resources[0].data.size).toBe(10);
     expect(hit.resources[0].data.bodyHash).toBe("hash");
-    expect(hit.resources[0].recognition).toBeUndefined();
+    // Recognition is replaced with a non-parseable marker (keeps OCR
+    // eligibility, forces a live re-fetch), not deleted outright.
+    expect(hit.resources[0].recognition).toBeTruthy();
+    expect(Buffer.isBuffer(hit.resources[0].recognition)).toBe(false);
     // The caller's original object is untouched — it still has the body inline
     // for its own (miss-path) attachment extraction.
     expect(withRes.resources[0].data.body).toBeDefined();
-    expect(withRes.resources[0].recognition).toBeDefined();
+    expect(Buffer.isBuffer(withRes.resources[0].recognition)).toBe(true);
   });
 
   it("skips caching bodies larger than maxEntryBytes", () => {

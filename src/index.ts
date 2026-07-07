@@ -739,7 +739,8 @@ const tools: Tool[] = [
           type: "boolean",
           description:
             "Single-note mode: extract text from readable attachments — PDF text layers and Evernote OCR for images " +
-            "(default: true). When false, attachment resources are not fetched, so resource metadata is omitted too. " +
+            "(default: true). When false, attachment text is not extracted and resource bodies aren't fetched; " +
+            "resource metadata (filenames, mime, size) is still included. " +
             "Ignored in batch (guids) mode, which never fetches attachment text.",
           default: true,
         },
@@ -1406,11 +1407,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let contentByGuid: Map<string, string | undefined> | undefined;
         let batchAborted: BatchFetchResult["aborted"];
         let batchFailed: BatchFetchResult["failed"] = [];
+        // We just read each note's current USN from findNotesMetadata; pass it
+        // to the cached reads so a body edited externally since it was cached is
+        // treated as a miss instead of pairing a fresh title with a stale body.
+        const knownUsns = new Map<string, number>(
+          results.notes
+            .filter((n: any) => typeof n.updateSequenceNum === "number")
+            .map((n: any) => [n.guid, n.updateSequenceNum]),
+        );
         if (includeContent && results.notes.length > 0) {
           const guids = results.notes.map((n: any) => n.guid);
           const batch = await evernoteApi.getNotesBatch(guids, {
             includeContent: true,
             format,
+            knownUsns,
           });
           contentByGuid = new Map(batch.notes.map((n) => [n.guid, n.content]));
           batchAborted = batch.aborted;
@@ -1456,7 +1466,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               // Preview-only: one getNote per note (the minimum to preview a
               // body). Cheaper than fetching content twice.
               try {
-                const preview = await evernoteApi.getNotePreview(note.guid, 300);
+                const preview = await evernoteApi.getNotePreview(
+                  note.guid,
+                  300,
+                  knownUsns.get(note.guid),
+                );
                 if (preview) {
                   enhanced.preview = preview;
                 }

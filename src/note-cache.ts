@@ -145,10 +145,21 @@ export class NoteCache {
 
   /**
    * Return a cached note, or `undefined` on a miss. A hit only counts when the
-   * entry carries what the caller needs: an entry cached without resource
-   * metadata does not satisfy a request that wants it.
+   * entry carries what the caller needs (an entry fetched without resource
+   * bodies does not satisfy a request that wants them) and is not known-stale:
+   * a caller that already read fresh metadata can pass the note's current
+   * `knownUsn` to evict-and-miss a body older than that version.
+   *
+   * Resource metadata (filenames/mime/size) is always preserved on the served
+   * note — only binary bodies are stripped at store time — so content rendering
+   * and resource listings stay consistent regardless of which read primed the
+   * cache.
    */
-  get(guid: string, needResources: boolean): any | undefined {
+  get(
+    guid: string,
+    needResources: boolean,
+    knownUsn?: number,
+  ): any | undefined {
     if (!this.enabled) {
       return undefined;
     }
@@ -157,19 +168,18 @@ export class NoteCache {
       this.misses++;
       return undefined;
     }
+    // The caller proved (via fresh metadata) that a newer version exists than
+    // the one we hold — drop the stale body and miss so it gets re-fetched,
+    // rather than pairing a fresh title/updated with an old body.
+    if (knownUsn != null && entry.usn < knownUsn) {
+      this.evict(guid);
+      this.misses++;
+      return undefined;
+    }
     // LRU bump: re-insert so this GUID becomes most-recently-used.
     this.map.delete(guid);
     this.map.set(guid, entry);
     this.hits++;
-    if (!needResources && entry.hasResources) {
-      // The caller didn't ask for resources but this entry was cached from a
-      // withResources read. Hand back a resource-free view so a
-      // get_note(includeAttachmentText:false) read keeps its documented
-      // contract of omitting resource metadata, regardless of an earlier
-      // attachment-text read having populated the cache. The stored entry keeps
-      // its resources for later withResources hits.
-      return stripResourcesView(entry.note);
-    }
     return entry.note;
   }
 
@@ -361,17 +371,16 @@ export class NoteCache {
   }
 }
 
-/** Shallow view of a note with its `resources` field omitted. */
-function stripResourcesView(note: any): any {
-  if (!note || note.resources == null) {
-    return note;
-  }
-  const view = { ...note };
-  delete view.resources;
-  return view;
-}
+/**
+ * Stand-in for stripped recognition data: truthy (so resources without a MIME
+ * type stay OCR-eligible in `canExtractAttachmentText`/`supportsOcrLookup`) but
+ * carries no parseable body, so the actual text is always re-fetched live via
+ * getResourceRecognition — recognition updates async without a USN bump, so it
+ * must never be served from cache.
+ */
+const STRIPPED_RECOGNITION = Object.freeze({ stripped: true });
 
-/** Shallow-clone a note with resource binaries and recognition removed. */
+/** Shallow-clone a note with resource binaries stripped and recognition marked. */
 function stripForCache(note: any): any {
   if (!note?.resources?.length) {
     return note;
@@ -392,7 +401,11 @@ function stripResource(resource: any): any {
     out.data = { ...out.data, body: undefined };
   }
   if (out.recognition != null) {
-    out.recognition = undefined;
+    // Replace (never delete) recognition with a non-parseable marker: dropping
+    // it outright would make a MIME-less resource fail the OCR-eligibility gate
+    // on a cache hit, silently losing its attachment text. The marker keeps it
+    // eligible while forcing a live recognition re-fetch.
+    out.recognition = STRIPPED_RECOGNITION;
   }
   return out;
 }

@@ -133,14 +133,17 @@ export class EvernoteAPI {
    */
   async getNoteCached(
     guid: string,
-    opts: { withResources?: boolean } = {},
+    opts: { withResources?: boolean; knownUsn?: number } = {},
   ): Promise<any> {
     const withResources = opts.withResources ?? false;
     if (!this.noteCache) {
       return this.getNote(guid, true, withResources);
     }
     await this.noteCache.ensureFresh(this as unknown as NoteCacheSyncApi);
-    const hit = this.noteCache.get(guid, withResources);
+    // `knownUsn` lets a caller that just read fresh metadata (search) reject a
+    // cached body that predates the version it saw, closing the window where a
+    // note is edited externally between cache time and the sync-TTL refresh.
+    const hit = this.noteCache.get(guid, withResources, opts.knownUsn);
     if (hit !== undefined) {
       return hit;
     }
@@ -218,8 +221,12 @@ export class EvernoteAPI {
   async getNotePreview(
     guid: string,
     maxLength: number = 300,
+    knownUsn?: number,
   ): Promise<string | null> {
-    const note = await this.getNoteCached(guid, { withResources: false });
+    const note = await this.getNoteCached(guid, {
+      withResources: false,
+      knownUsn,
+    });
     if (!note.content) {
       return null;
     }
@@ -267,7 +274,11 @@ export class EvernoteAPI {
    */
   async getNotesBatch(
     guids: string[],
-    opts: { includeContent: boolean; format: NoteFormat },
+    opts: {
+      includeContent: boolean;
+      format: NoteFormat;
+      knownUsns?: Map<string, number>;
+    },
   ): Promise<BatchFetchResult> {
     const notes: BatchNoteEntry[] = [];
     const failed: BatchFetchResult["failed"] = [];
@@ -277,8 +288,12 @@ export class EvernoteAPI {
       try {
         // Route body-bearing fetches through the cache; a metadata-only fetch
         // (includeContent=false) has no body worth caching, so hit the API.
+        // A known USN (from a prior metadata read) evicts a stale cached body.
         const note = opts.includeContent
-          ? await this.getNoteCached(guid, { withResources: false })
+          ? await this.getNoteCached(guid, {
+              withResources: false,
+              knownUsn: opts.knownUsns?.get(guid),
+            })
           : await this.getNote(guid, false, false);
         const entry: BatchNoteEntry = {
           guid: note.guid,
