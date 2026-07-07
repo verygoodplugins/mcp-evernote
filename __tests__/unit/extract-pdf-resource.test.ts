@@ -6,6 +6,7 @@ jest.mock('pdf-parse', () => ({
 
 import { PDFParse } from 'pdf-parse';
 import { EvernoteAPI } from '../../src/evernote-api.js';
+import * as pdfExtract from '../../src/pdf-extract.js';
 
 const MockedPDFParse = PDFParse as unknown as jest.Mock;
 
@@ -115,10 +116,10 @@ describe('EvernoteAPI.extractResourceText', () => {
     expect(result).toBe('PDF OCR fallback');
   });
 
-  it('extracts OCR text from image recognition data', async () => {
+  it('extracts OCR text from image recognition data without downloading the body', async () => {
     const getResource = jest
       .fn<(...args: any[]) => Promise<any>>()
-      .mockResolvedValue({ mime: 'image/png', data: { body: Buffer.from('image') } });
+      .mockResolvedValue({ mime: 'image/png' });
     const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(`
       <recoIndex>
         <item x="1" y="2" w="3" h="4"><t w="95">Hello</t></item>
@@ -129,8 +130,36 @@ describe('EvernoteAPI.extractResourceText', () => {
     const result = await makeApi(getResource, getResourceRecognition).extractResourceText('image-guid');
 
     expect(result).toBe('Hello image OCR');
+    expect(getResource).toHaveBeenCalledWith('image-guid', false, false, false, false);
     expect(getResourceRecognition).toHaveBeenCalledWith('image-guid');
     expect(MockedPDFParse).not.toHaveBeenCalled();
+  });
+
+  it('falls back to OCR when pdf-parse is unavailable', async () => {
+    const unavailableSpy = jest
+      .spyOn(pdfExtract, 'extractPdfText')
+      .mockResolvedValue(
+        '[PDF text extraction unavailable — the pdf-parse module could not be loaded (requires Node >= 20.16)]',
+      );
+    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
+    const prefetched = {
+      mime: 'application/pdf',
+      data: { body: Buffer.from('%PDF-1.4') },
+      recognition: {
+        body: Buffer.from(`
+          <recoIndex>
+            <item x="1" y="2" w="3" h="4"><t w="97">Scanned PDF OCR</t></item>
+          </recoIndex>
+        `),
+      },
+    };
+
+    try {
+      const result = await makeApi(getResource).extractResourceText('pdf-guid', prefetched);
+      expect(result).toBe('Scanned PDF OCR');
+    } finally {
+      unavailableSpy.mockRestore();
+    }
   });
 
   it('reuses prefetched recognition data and does not download the resource again', async () => {
@@ -138,11 +167,13 @@ describe('EvernoteAPI.extractResourceText', () => {
     const getResourceRecognition = jest.fn<(...args: any[]) => Promise<any>>();
     const prefetched = {
       mime: 'image/jpeg',
-      recognition: Buffer.from(`
+      recognition: {
+        body: Buffer.from(`
         <recoIndex>
           <item x="1" y="2" w="3" h="4"><t w="99">Prefetched OCR</t></item>
         </recoIndex>
       `),
+      },
     };
 
     const result = await makeApi(getResource, getResourceRecognition).extractResourceText('image-guid', prefetched);

@@ -423,7 +423,15 @@ export class EvernoteAPI {
   async extractResourceText(resourceGuid: string, prefetched?: any): Promise<string> {
     let resource: any;
     try {
-      resource = prefetched ?? await this.getResource(resourceGuid, true);
+      if (prefetched != null) {
+        resource = prefetched;
+      } else {
+        // Metadata-only fetch for OCR paths; PDF text extraction needs the body.
+        resource = await this.getResource(resourceGuid, false);
+        if (resource?.mime === 'application/pdf') {
+          resource = await this.getResource(resourceGuid, true);
+        }
+      }
     } catch {
       return '[Resource text extraction failed — could not retrieve the attachment]';
     }
@@ -563,13 +571,23 @@ export class EvernoteAPI {
       .join(' ');
   }
 
+  private recognitionXmlPayload(recognition: any): any {
+    if (recognition == null) {
+      return null;
+    }
+    if (recognition.body != null) {
+      return recognition.body;
+    }
+    return recognition;
+  }
+
   private async extractRecognitionTextFromResource(
     resourceGuid: string,
     resource: any
   ): Promise<string | null> {
     try {
       const recognition = resource?.recognition != null
-        ? this.parseRecognitionXml(resourceGuid, resource.recognition)
+        ? this.parseRecognitionXml(resourceGuid, this.recognitionXmlPayload(resource.recognition))
         : await this.getResourceRecognition(resourceGuid);
 
       return this.extractTextFromRecognition(recognition);
@@ -579,7 +597,7 @@ export class EvernoteAPI {
   }
 
   private isPdfExtractionFallback(text: string): boolean {
-    return text.startsWith('[PDF text extraction ');
+    return text.startsWith('[') && text.includes('PDF text extraction');
   }
 
   private getMimeType(ext: string): string {
