@@ -1,27 +1,27 @@
 #!/usr/bin/env node
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { config } from 'dotenv';
-import { ZodError } from 'zod';
-import { EvernoteOAuth } from './oauth.js';
-import { EvernoteAPI } from './evernote-api.js';
-import { EvernoteConfig, NotebookInfo } from './types.js';
-import { validateToolArgs } from './tool-schemas.js';
-import { computeWebhookSignature } from './webhook.js';
+} from "@modelcontextprotocol/sdk/types.js";
+import { config } from "dotenv";
+import { ZodError } from "zod";
+import { EvernoteOAuth } from "./oauth.js";
+import { EvernoteAPI } from "./evernote-api.js";
+import { EvernoteConfig, NotebookInfo } from "./types.js";
+import { validateToolArgs } from "./tool-schemas.js";
+import { computeWebhookSignature } from "./webhook.js";
 import {
   enrichToolsWithNotebookDescriptions,
   resolveNotebookCacheForToolDescriptions,
-} from './notebook-tool-descriptions.js';
+} from "./notebook-tool-descriptions.js";
 import {
   PollingChange,
   buildWebhookPayload,
   checkForPollingChanges,
-} from './polling.js';
+} from "./polling.js";
 
 // Load environment variables
 config({ quiet: true });
@@ -29,22 +29,32 @@ config({ quiet: true });
 // Validate required environment variables with clear instructions
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
-const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || 'production';
+const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || "production";
 if (!CONSUMER_KEY || !CONSUMER_SECRET) {
-  console.error('');
-  console.error('=== IMPORTANT: RELAY THIS MESSAGE TO THE USER IMMEDIATELY ===');
-  console.error('');
-  console.error('EVERNOTE MCP SERVER - CONFIGURATION ERROR');
-  console.error('');
-  console.error('Missing required environment variables:');
-  if (!CONSUMER_KEY) console.error('  - EVERNOTE_CONSUMER_KEY (get from https://dev.evernote.com/)');
-  if (!CONSUMER_SECRET) console.error('  - EVERNOTE_CONSUMER_SECRET (get from https://dev.evernote.com/)');
-  console.error('');
-  console.error('Set these in your MCP server configuration:');
-  console.error('  claude mcp add evernote <command> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret>');
-  console.error('');
-  console.error('=== END OF MESSAGE TO RELAY ===');
-  console.error('');
+  console.error("");
+  console.error(
+    "=== IMPORTANT: RELAY THIS MESSAGE TO THE USER IMMEDIATELY ===",
+  );
+  console.error("");
+  console.error("EVERNOTE MCP SERVER - CONFIGURATION ERROR");
+  console.error("");
+  console.error("Missing required environment variables:");
+  if (!CONSUMER_KEY)
+    console.error(
+      "  - EVERNOTE_CONSUMER_KEY (get from https://dev.evernote.com/)",
+    );
+  if (!CONSUMER_SECRET)
+    console.error(
+      "  - EVERNOTE_CONSUMER_SECRET (get from https://dev.evernote.com/)",
+    );
+  console.error("");
+  console.error("Set these in your MCP server configuration:");
+  console.error(
+    "  claude mcp add evernote <command> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret>",
+  );
+  console.error("");
+  console.error("=== END OF MESSAGE TO RELAY ===");
+  console.error("");
   process.exit(1);
 }
 
@@ -53,11 +63,14 @@ const MIN_POLL_INTERVAL = 15 * 60 * 1000; // 15 minutes minimum (Evernote requir
 const DEFAULT_POLL_INTERVAL = 60 * 60 * 1000; // 1 hour default
 const POLL_INTERVAL = Math.max(
   MIN_POLL_INTERVAL,
-  parseInt(process.env.EVERNOTE_POLL_INTERVAL || String(DEFAULT_POLL_INTERVAL), 10)
+  parseInt(
+    process.env.EVERNOTE_POLL_INTERVAL || String(DEFAULT_POLL_INTERVAL),
+    10,
+  ),
 );
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
 const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
-const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === 'true';
+const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
 
 // Polling state
 let lastUpdateCount: number | null = null;
@@ -69,8 +82,8 @@ let pollErrorCount: number = 0;
 const evernoteConfig: EvernoteConfig = {
   consumerKey: CONSUMER_KEY,
   consumerSecret: CONSUMER_SECRET,
-  sandbox: ENVIRONMENT === 'sandbox',
-  china: false
+  sandbox: ENVIRONMENT === "sandbox",
+  china: false,
 };
 
 // Initialize OAuth and API
@@ -84,13 +97,15 @@ let tagCache: any[] | null = null;
 let tagCacheAt = 0;
 // Notebooks and tags change rarely; serve repeated reads from a short TTL cache.
 const ENTITY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let notebookRefreshInFlight: Promise<NotebookInfo[]> | null = null;
+let tagRefreshInFlight: Promise<any[]> | null = null;
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  if (typeof error === 'string') {
+  if (typeof error === "string") {
     return error;
   }
   try {
@@ -106,14 +121,37 @@ function isAuthFailure(error: unknown): boolean {
     return true;
   }
   const msg = errorMessage(error);
-  return /authentication required|token may be expired|invalid token|not connected/i.test(msg);
+  return /authentication required|token may be expired|invalid token|not connected/i.test(
+    msg,
+  );
 }
 
-async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookInfo[] | null> {
+function clearEntityCaches(): void {
+  notebookCache = null;
+  notebookCacheAt = 0;
+  tagCache = null;
+  tagCacheAt = 0;
+  notebookRefreshInFlight = null;
+  tagRefreshInFlight = null;
+}
+
+function getEvernoteErrorMeta(error: any): { errorCode?: number; rateLimitDuration?: number } {
+  const original = error?.originalError ?? error;
+  return {
+    errorCode: error?.errorCode ?? original?.errorCode,
+    rateLimitDuration: error?.rateLimitDuration ?? original?.rateLimitDuration,
+  };
+}
+
+async function refreshNotebookCache(
+  evernoteApi: EvernoteAPI,
+): Promise<NotebookInfo[] | null> {
   try {
     notebookCache = await evernoteApi.listNotebooks();
     notebookCacheAt = Date.now();
-    console.error(`Notebook cache refreshed: ${notebookCache.length} notebooks`);
+    console.error(
+      `Notebook cache refreshed: ${notebookCache.length} notebooks`,
+    );
     return notebookCache;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
@@ -126,22 +164,36 @@ async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookI
 // (errorCode 19) and returning an empty list. On a COLD cache a failed refresh
 // is surfaced (not swallowed into an empty list), so rate-limit errors reach the
 // caller; a stale cache is served when one exists.
-async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInfo[]> {
+async function getCachedNotebooks(
+  evernoteApi: EvernoteAPI,
+): Promise<NotebookInfo[]> {
   const now = Date.now();
   if (notebookCache !== null && now - notebookCacheAt < ENTITY_CACHE_TTL_MS) {
     return notebookCache;
   }
-  try {
-    notebookCache = await evernoteApi.listNotebooks();
-    notebookCacheAt = Date.now();
-    return notebookCache;
-  } catch (error) {
-    if (notebookCache !== null && !isAuthFailure(error)) {
-      console.error(`listNotebooks failed; serving stale notebook cache: ${errorMessage(error)}`);
-      return notebookCache;
-    }
-    throw error;
+  if (notebookRefreshInFlight) {
+    return notebookRefreshInFlight;
   }
+
+  notebookRefreshInFlight = (async () => {
+    try {
+      notebookCache = await evernoteApi.listNotebooks();
+      notebookCacheAt = Date.now();
+      return notebookCache;
+    } catch (error) {
+      if (notebookCache !== null && !isAuthFailure(error)) {
+        console.error(
+          `listNotebooks failed; serving stale notebook cache: ${errorMessage(error)}`,
+        );
+        return notebookCache;
+      }
+      throw error;
+    } finally {
+      notebookRefreshInFlight = null;
+    }
+  })();
+
+  return notebookRefreshInFlight;
 }
 
 // Same rationale as notebooks: tags are read on every note format/auto-tag pass.
@@ -150,23 +202,38 @@ async function getCachedTags(evernoteApi: EvernoteAPI): Promise<any[]> {
   if (tagCache !== null && now - tagCacheAt < ENTITY_CACHE_TTL_MS) {
     return tagCache;
   }
-  try {
-    tagCache = await evernoteApi.listTags();
-    tagCacheAt = Date.now();
-    return tagCache;
-  } catch (error) {
-    if (tagCache !== null && !isAuthFailure(error)) {
-      console.error(`listTags failed; serving stale tag cache: ${errorMessage(error)}`);
-      return tagCache;
-    }
-    throw error;
+  if (tagRefreshInFlight) {
+    return tagRefreshInFlight;
   }
+
+  tagRefreshInFlight = (async () => {
+    try {
+      tagCache = await evernoteApi.listTags();
+      tagCacheAt = Date.now();
+      return tagCache;
+    } catch (error) {
+      if (tagCache !== null && !isAuthFailure(error)) {
+        console.error(
+          `listTags failed; serving stale tag cache: ${errorMessage(error)}`,
+        );
+        return tagCache;
+      }
+      throw error;
+    } finally {
+      tagRefreshInFlight = null;
+    }
+  })();
+
+  return tagRefreshInFlight;
 }
 
 async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
   const now = Date.now();
   const timeSinceLastAttempt = now - lastToolDescriptionInitFailure;
-  if (lastToolDescriptionInitFailure > 0 && timeSinceLastAttempt < INIT_RETRY_DELAY) {
+  if (
+    lastToolDescriptionInitFailure > 0 &&
+    timeSinceLastAttempt < INIT_RETRY_DELAY
+  ) {
     throw new Error(
       `Skipping notebook cache load after recent init failure; retry in ` +
         `${Math.ceil((INIT_RETRY_DELAY - timeSinceLastAttempt) / 1000)}s.`,
@@ -196,44 +263,54 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     api = null;
     apiInitError = null;
     lastInitAttempt = 0;
+    clearEntityCaches();
   }
-  
+
   // If we have a working API, return it
   if (api) {
     return api;
   }
-  
+
   // If we recently failed, check if enough time has passed to retry
   const now = Date.now();
   if (apiInitError && lastInitAttempt > 0) {
     const timeSinceLastAttempt = now - lastInitAttempt;
     if (timeSinceLastAttempt < INIT_RETRY_DELAY) {
-      throw new Error(`Not connected. Last attempt failed ${Math.floor(timeSinceLastAttempt / 1000)}s ago. Retry in ${Math.ceil((INIT_RETRY_DELAY - timeSinceLastAttempt) / 1000)}s.`);
+      throw new Error(
+        `Not connected. Last attempt failed ${Math.floor(timeSinceLastAttempt / 1000)}s ago. Retry in ${Math.ceil((INIT_RETRY_DELAY - timeSinceLastAttempt) / 1000)}s.`,
+      );
     }
     // Enough time has passed, clear error and retry
-    console.error(`Retrying API initialization after ${timeSinceLastAttempt}ms...`);
+    console.error(
+      `Retrying API initialization after ${timeSinceLastAttempt}ms...`,
+    );
     apiInitError = null;
   }
-  
+
   try {
     lastInitAttempt = now;
     const { client, tokens } = await oauth.getAuthenticatedClient();
     api = new EvernoteAPI(client, tokens);
     apiInitError = null;
-    console.error('API initialized successfully');
+    console.error("API initialized successfully");
     // Seed notebook cache in the background so descriptions are ready for ListTools
     refreshNotebookCache(api).catch(() => {});
     return api;
   } catch (error: any) {
-    apiInitError = error.message || 'Failed to initialize Evernote API';
+    apiInitError = error.message || "Failed to initialize Evernote API";
     console.error(`API initialization failed: ${apiInitError}`);
-    
+
     // For auth errors, provide a clearer message
-    const errorMsg = error.message || '';
-    if (errorMsg.includes('Authentication required') || errorMsg.includes('token')) {
-      throw new Error('Not connected: Authentication required. Token may be expired or invalid.');
+    const errorMsg = error.message || "";
+    if (
+      errorMsg.includes("Authentication required") ||
+      errorMsg.includes("token")
+    ) {
+      throw new Error(
+        "Not connected: Authentication required. Token may be expired or invalid.",
+      );
     }
-    
+
     throw new Error(`Not connected: ${apiInitError}`);
   }
 }
@@ -242,14 +319,18 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
 // Polling for Changes
 // ============================================================================
 
-async function sendWebhookNotification(changes: PollingChange[]): Promise<void> {
+async function sendWebhookNotification(
+  changes: PollingChange[],
+): Promise<void> {
   if (!WEBHOOK_URL) {
-    console.error('No webhook URL configured, skipping notification');
+    console.error("No webhook URL configured, skipping notification");
     return;
   }
 
   if (!WEBHOOK_SECRET) {
-    console.error('Warning: EVERNOTE_WEBHOOK_SECRET not set - webhook payloads are unsigned');
+    console.error(
+      "Warning: EVERNOTE_WEBHOOK_SECRET not set - webhook payloads are unsigned",
+    );
   }
 
   // Send one webhook per change for cleaner workflow processing
@@ -258,32 +339,43 @@ async function sendWebhookNotification(changes: PollingChange[]): Promise<void> 
       const body = JSON.stringify(buildWebhookPayload(change));
 
       const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'X-Evernote-Source': 'mcp-evernote-polling',
+        "Content-Type": "application/json",
+        "X-Evernote-Source": "mcp-evernote-polling",
       };
 
       if (WEBHOOK_SECRET) {
-        headers['X-Evernote-Signature'] = computeWebhookSignature(body, WEBHOOK_SECRET);
+        headers["X-Evernote-Signature"] = computeWebhookSignature(
+          body,
+          WEBHOOK_SECRET,
+        );
       }
 
       const response = await fetch(WEBHOOK_URL, {
-        method: 'POST',
+        method: "POST",
         headers,
         body,
       });
 
       if (!response.ok) {
-        console.error(`Webhook notification failed for ${change.guid}: ${response.status} ${response.statusText}`);
+        console.error(
+          `Webhook notification failed for ${change.guid}: ${response.status} ${response.statusText}`,
+        );
       } else {
-        console.error(`Webhook notification sent: ${change.type} - ${change.title || change.guid}`);
+        console.error(
+          `Webhook notification sent: ${change.type} - ${change.title || change.guid}`,
+        );
       }
     } catch (error: any) {
-      console.error(`Webhook notification error for ${change.guid}: ${error.message}`);
+      console.error(
+        `Webhook notification error for ${change.guid}: ${error.message}`,
+      );
     }
   }
 
   if (changes.length > 0) {
-    console.error(`Webhook notifications complete: ${changes.length} changes sent`);
+    console.error(
+      `Webhook notifications complete: ${changes.length} changes sent`,
+    );
   }
 }
 
@@ -297,14 +389,14 @@ async function checkForChanges(): Promise<PollingChange[]> {
     });
 
     console.error(
-      `Polling: Current updateCount = ${result.currentUpdateCount}, last = ${previousUpdateCount}`
+      `Polling: Current updateCount = ${result.currentUpdateCount}, last = ${previousUpdateCount}`,
     );
 
     // First run - just store the count
     if (previousUpdateCount === null) {
       lastUpdateCount = result.nextUpdateCount;
       pollErrorCount = 0;
-      console.error('Polling: Initial sync state captured');
+      console.error("Polling: Initial sync state captured");
       return result.changes;
     }
 
@@ -312,20 +404,20 @@ async function checkForChanges(): Promise<PollingChange[]> {
     if (result.currentUpdateCount === previousUpdateCount) {
       lastUpdateCount = result.nextUpdateCount;
       pollErrorCount = 0;
-      console.error('Polling: No changes detected');
+      console.error("Polling: No changes detected");
       return result.changes;
     }
 
-    console.error(
-      `Polling: Changes detected since USN ${previousUpdateCount}`
-    );
+    console.error(`Polling: Changes detected since USN ${previousUpdateCount}`);
 
     if (result.error) {
-      console.error(`Polling: Failed to get sync chunk: ${result.error.message}`);
+      console.error(
+        `Polling: Failed to get sync chunk: ${result.error.message}`,
+      );
       pollErrorCount++;
 
       if (pollErrorCount >= 5) {
-        console.error('Polling: Too many errors, stopping polling');
+        console.error("Polling: Too many errors, stopping polling");
         stopPolling();
       }
 
@@ -340,48 +432,54 @@ async function checkForChanges(): Promise<PollingChange[]> {
   } catch (error: any) {
     console.error(`Polling error: ${error.message}`);
     pollErrorCount++;
-    
+
     // If too many errors, stop polling
     if (pollErrorCount >= 5) {
-      console.error('Polling: Too many errors, stopping polling');
+      console.error("Polling: Too many errors, stopping polling");
       stopPolling();
     }
-    
+
     return [];
   }
 }
 
 async function pollOnce(): Promise<PollingChange[]> {
   lastPollTime = Date.now();
-  
+
   const changes = await checkForChanges();
-  
+
   if (changes.length > 0 && WEBHOOK_URL) {
     await sendWebhookNotification(changes);
   }
-  
+
   return changes;
 }
 
 function startPolling(): void {
   if (pollInterval) {
-    console.error('Polling already running');
+    console.error("Polling already running");
     return;
   }
-  
-  console.error(`Starting Evernote polling every ${POLL_INTERVAL / 60000} minutes`);
+
+  console.error(
+    `Starting Evernote polling every ${POLL_INTERVAL / 60000} minutes`,
+  );
   if (WEBHOOK_URL) {
     console.error(`Webhook URL: ${WEBHOOK_URL}`);
   } else {
-    console.error('Warning: No EVERNOTE_WEBHOOK_URL configured - changes will be logged but not sent');
+    console.error(
+      "Warning: No EVERNOTE_WEBHOOK_URL configured - changes will be logged but not sent",
+    );
   }
-  
+
   // Do an initial poll
-  pollOnce().catch(err => console.error(`Initial poll failed: ${err.message}`));
-  
+  pollOnce().catch((err) =>
+    console.error(`Initial poll failed: ${err.message}`),
+  );
+
   // Set up the interval
   pollInterval = setInterval(() => {
-    pollOnce().catch(err => console.error(`Poll failed: ${err.message}`));
+    pollOnce().catch((err) => console.error(`Poll failed: ${err.message}`));
   }, POLL_INTERVAL);
 }
 
@@ -389,7 +487,7 @@ function stopPolling(): void {
   if (pollInterval) {
     clearInterval(pollInterval);
     pollInterval = null;
-    console.error('Polling stopped');
+    console.error("Polling stopped");
   }
 }
 
@@ -399,7 +497,7 @@ function getPollingStatus(): any {
     running: !!pollInterval,
     intervalMinutes: POLL_INTERVAL / 60000,
     minIntervalMinutes: MIN_POLL_INTERVAL / 60000,
-    webhookUrl: WEBHOOK_URL ? WEBHOOK_URL.substring(0, 50) + '...' : null,
+    webhookUrl: WEBHOOK_URL ? WEBHOOK_URL.substring(0, 50) + "..." : null,
     webhookSecretConfigured: !!WEBHOOK_SECRET,
     lastPollTime: lastPollTime ? new Date(lastPollTime).toISOString() : null,
     lastUpdateCount,
@@ -414,475 +512,484 @@ function getPollingStatus(): any {
 // Create MCP server
 const server = new Server(
   {
-    name: 'mcp-evernote',
-    version: '1.2.0',
+    name: "mcp-evernote",
+    version: "1.2.0",
   },
   {
     capabilities: {
       tools: {},
     },
-  }
+  },
 );
 
 // Define tool schemas
 const tools: Tool[] = [
   {
-    name: 'evernote_create_note',
-    description: 'Create a new note in Evernote',
+    name: "evernote_create_note",
+    description: "Create a new note in Evernote",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         title: {
-          type: 'string',
-          description: 'Note title',
+          type: "string",
+          description: "Note title",
         },
         content: {
-          type: 'string',
-          description: 'Note content (plain text or markdown)',
+          type: "string",
+          description: "Note content (plain text or markdown)",
         },
         notebookName: {
-          type: 'string',
-          description: 'Name of the notebook to create the note in (optional)',
+          type: "string",
+          description: "Name of the notebook to create the note in (optional)",
         },
         tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Tags to apply to the note',
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to apply to the note",
         },
       },
-      required: ['title', 'content'],
+      required: ["title", "content"],
     },
   },
   {
-    name: 'evernote_search_notes',
-    description: 'Search for notes in Evernote with optional content preview',
+    name: "evernote_search_notes",
+    description: "Search for notes in Evernote with optional content preview",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         query: {
-          type: 'string',
-          description: 'Search query (Evernote search syntax supported)',
+          type: "string",
+          description: "Search query (Evernote search syntax supported)",
         },
         notebookName: {
-          type: 'string',
-          description: 'Limit search to specific notebook',
+          type: "string",
+          description: "Limit search to specific notebook",
         },
         maxResults: {
-          type: 'number',
-          description: 'Maximum number of results (default: 20, max: 100)',
+          type: "number",
+          description: "Maximum number of results (default: 20, max: 100)",
           default: 20,
         },
         includePreview: {
-          type: 'boolean',
-          description: 'Include first ~300 chars of note content as plain text preview (requires extra API calls)',
+          type: "boolean",
+          description:
+            "Include first ~300 chars of note content as plain text preview (requires extra API calls)",
           default: false,
         },
       },
-      required: ['query'],
+      required: ["query"],
     },
   },
   {
-    name: 'evernote_get_note',
-    description: 'Get a specific note by its GUID. PDF attachment text is extracted and included by default; set includePdfContent: false to skip it.',
+    name: "evernote_get_note",
+    description:
+      "Get a specific note by its GUID. PDF attachment text is extracted and included by default; set includePdfContent: false to skip it.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
         includeContent: {
-          type: 'boolean',
-          description: 'Include note content (default: true)',
+          type: "boolean",
+          description: "Include note content (default: true)",
           default: true,
         },
         includePdfContent: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'Extract and include text from PDF attachments (default: true). When false, ' +
-            'attachment resources are not fetched, so resource metadata is omitted from the response too.',
+            "Extract and include text from PDF attachments (default: true). When false, " +
+            "attachment resources are not fetched, so resource metadata is omitted from the response too.",
           default: true,
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   {
-    name: 'evernote_update_note',
-    description: 'Update an existing note',
+    name: "evernote_update_note",
+    description: "Update an existing note",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
         title: {
-          type: 'string',
-          description: 'New title (optional)',
+          type: "string",
+          description: "New title (optional)",
         },
         content: {
-          type: 'string',
-          description: 'New content (optional, Markdown supported)',
+          type: "string",
+          description: "New content (optional, Markdown supported)",
         },
         notebookName: {
-          type: 'string',
-          description: 'Move note to this notebook (optional)',
+          type: "string",
+          description: "Move note to this notebook (optional)",
         },
         tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'New tags (replaces existing tags)',
+          type: "array",
+          items: { type: "string" },
+          description: "New tags (replaces existing tags)",
         },
         forceUpdate: {
-          type: 'boolean',
-          description: 'DESTRUCTIVE: If true and update fails due to edit lock, DELETES the original note and creates a replacement. The note GUID will change, note history will be lost, and timestamps will reset. Only use as a last resort after confirming with the user.',
+          type: "boolean",
+          description:
+            "DESTRUCTIVE: If true and update fails due to edit lock, DELETES the original note and creates a replacement. The note GUID will change, note history will be lost, and timestamps will reset. Only use as a last resort after confirming with the user.",
           default: false,
         },
         forceUpdateConfirmation: {
-          type: 'string',
-          description: 'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
+          type: "string",
+          description:
+            'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   {
-    name: 'evernote_delete_note',
-    description: 'Delete a note',
+    name: "evernote_delete_note",
+    description: "Delete a note",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   {
-    name: 'evernote_list_notebooks',
-    description: 'List all notebooks',
+    name: "evernote_list_notebooks",
+    description: "List all notebooks",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_create_notebook',
-    description: 'Create a new notebook',
+    name: "evernote_create_notebook",
+    description: "Create a new notebook",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         name: {
-          type: 'string',
-          description: 'Notebook name',
+          type: "string",
+          description: "Notebook name",
         },
         stack: {
-          type: 'string',
-          description: 'Stack name (optional)',
+          type: "string",
+          description: "Stack name (optional)",
         },
       },
-      required: ['name'],
+      required: ["name"],
     },
   },
   {
-    name: 'evernote_list_tags',
-    description: 'List all tags',
+    name: "evernote_list_tags",
+    description: "List all tags",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_create_tag',
-    description: 'Create a new tag',
+    name: "evernote_create_tag",
+    description: "Create a new tag",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         name: {
-          type: 'string',
-          description: 'Tag name',
+          type: "string",
+          description: "Tag name",
         },
         parentTagName: {
-          type: 'string',
-          description: 'Parent tag name (optional)',
+          type: "string",
+          description: "Parent tag name (optional)",
         },
       },
-      required: ['name'],
+      required: ["name"],
     },
   },
   {
-    name: 'evernote_get_user_info',
-    description: 'Get current user information and quota',
+    name: "evernote_get_user_info",
+    description: "Get current user information and quota",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_revoke_auth',
-    description: 'Revoke stored authentication token',
+    name: "evernote_revoke_auth",
+    description: "Revoke stored authentication token",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_health_check',
-    description: 'Check the health and status of the Evernote MCP server',
+    name: "evernote_health_check",
+    description: "Check the health and status of the Evernote MCP server",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         verbose: {
-          type: 'boolean',
-          description: 'Include detailed diagnostic information',
+          type: "boolean",
+          description: "Include detailed diagnostic information",
           default: false,
         },
       },
     },
   },
   {
-    name: 'evernote_reconnect',
-    description: 'Force reconnection to Evernote (useful when "Not connected" errors persist)',
+    name: "evernote_reconnect",
+    description:
+      'Force reconnection to Evernote (useful when "Not connected" errors persist)',
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_start_polling',
-    description: 'Start polling for Evernote changes. Checks for new/updated notes and sends notifications to configured webhook URL.',
+    name: "evernote_start_polling",
+    description:
+      "Start polling for Evernote changes. Checks for new/updated notes and sends notifications to configured webhook URL.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_stop_polling',
-    description: 'Stop polling for Evernote changes',
+    name: "evernote_stop_polling",
+    description: "Stop polling for Evernote changes",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_poll_now',
-    description: 'Check for Evernote changes immediately without waiting for next poll interval',
+    name: "evernote_poll_now",
+    description:
+      "Check for Evernote changes immediately without waiting for next poll interval",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   {
-    name: 'evernote_polling_status',
-    description: 'Get the current polling configuration and status',
+    name: "evernote_polling_status",
+    description: "Get the current polling configuration and status",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {},
     },
   },
   // Resource tools
   {
-    name: 'evernote_get_resource',
-    description: 'Download a resource (attachment) by its GUID',
+    name: "evernote_get_resource",
+    description: "Download a resource (attachment) by its GUID",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Resource GUID',
+          type: "string",
+          description: "Resource GUID",
         },
         includeData: {
-          type: 'boolean',
-          description: 'Include binary data as base64 (default: true)',
+          type: "boolean",
+          description: "Include binary data as base64 (default: true)",
           default: true,
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   {
-    name: 'evernote_list_note_resources',
-    description: 'List all resources (attachments) in a note',
+    name: "evernote_list_note_resources",
+    description: "List all resources (attachments) in a note",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         noteGuid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
       },
-      required: ['noteGuid'],
+      required: ["noteGuid"],
     },
   },
   {
-    name: 'evernote_add_resource_to_note',
-    description: 'Add a file/image attachment to an existing note',
+    name: "evernote_add_resource_to_note",
+    description: "Add a file/image attachment to an existing note",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         noteGuid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
         filePath: {
-          type: 'string',
-          description: 'Local file path to attach',
+          type: "string",
+          description: "Local file path to attach",
         },
         filename: {
-          type: 'string',
-          description: 'Optional display filename (defaults to file basename)',
+          type: "string",
+          description: "Optional display filename (defaults to file basename)",
         },
       },
-      required: ['noteGuid', 'filePath'],
+      required: ["noteGuid", "filePath"],
     },
   },
   {
-    name: 'evernote_get_resource_recognition',
-    description: 'Get OCR/text recognition data from an image resource',
+    name: "evernote_get_resource_recognition",
+    description: "Get OCR/text recognition data from an image resource",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         resourceGuid: {
-          type: 'string',
-          description: 'Resource GUID',
+          type: "string",
+          description: "Resource GUID",
         },
       },
-      required: ['resourceGuid'],
+      required: ["resourceGuid"],
     },
   },
   {
-    name: 'evernote_get_resource_text',
-    description: 'Extract plain text from a PDF resource attachment. Returns the text content, or an explanatory message if extraction failed (e.g. scanned/image-only PDF). Use this to read a specific PDF by its resource GUID.',
+    name: "evernote_get_resource_text",
+    description:
+      "Extract plain text from a PDF resource attachment. Returns the text content, or an explanatory message if extraction failed (e.g. scanned/image-only PDF). Use this to read a specific PDF by its resource GUID.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         resourceGuid: {
-          type: 'string',
-          description: 'Resource GUID of the PDF attachment',
+          type: "string",
+          description: "Resource GUID of the PDF attachment",
         },
       },
-      required: ['resourceGuid'],
+      required: ["resourceGuid"],
     },
   },
   // Notebook get/update tools
   {
-    name: 'evernote_get_notebook',
-    description: 'Get notebook details by name or GUID',
+    name: "evernote_get_notebook",
+    description: "Get notebook details by name or GUID",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         name: {
-          type: 'string',
-          description: 'Notebook name',
+          type: "string",
+          description: "Notebook name",
         },
         guid: {
-          type: 'string',
-          description: 'Notebook GUID',
+          type: "string",
+          description: "Notebook GUID",
         },
       },
     },
   },
   {
-    name: 'evernote_update_notebook',
-    description: 'Update notebook name or stack',
+    name: "evernote_update_notebook",
+    description: "Update notebook name or stack",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Notebook GUID',
+          type: "string",
+          description: "Notebook GUID",
         },
         name: {
-          type: 'string',
-          description: 'New notebook name',
+          type: "string",
+          description: "New notebook name",
         },
         stack: {
-          type: 'string',
-          description: 'Stack name (empty string to remove from stack)',
+          type: "string",
+          description: "Stack name (empty string to remove from stack)",
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   // Tag get/update tools
   {
-    name: 'evernote_get_tag',
-    description: 'Get tag details by name or GUID',
+    name: "evernote_get_tag",
+    description: "Get tag details by name or GUID",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         name: {
-          type: 'string',
-          description: 'Tag name',
+          type: "string",
+          description: "Tag name",
         },
         guid: {
-          type: 'string',
-          description: 'Tag GUID',
+          type: "string",
+          description: "Tag GUID",
         },
       },
     },
   },
   {
-    name: 'evernote_update_tag',
-    description: 'Update tag name or parent',
+    name: "evernote_update_tag",
+    description: "Update tag name or parent",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Tag GUID',
+          type: "string",
+          description: "Tag GUID",
         },
         name: {
-          type: 'string',
-          description: 'New tag name',
+          type: "string",
+          description: "New tag name",
         },
         parentTagName: {
-          type: 'string',
-          description: 'Parent tag name (empty string to remove parent)',
+          type: "string",
+          description: "Parent tag name (empty string to remove parent)",
         },
       },
-      required: ['guid'],
+      required: ["guid"],
     },
   },
   // Patch note tool for targeted find-and-replace updates
   {
-    name: 'evernote_patch_note',
-    description: 'Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.',
+    name: "evernote_patch_note",
+    description:
+      "Apply targeted find-and-replace edits to a note without regenerating full content. Useful for updating specific text like status fields, dates, or labels while preserving the rest of the note.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         guid: {
-          type: 'string',
-          description: 'Note GUID',
+          type: "string",
+          description: "Note GUID",
         },
         replacements: {
-          type: 'array',
+          type: "array",
           items: {
-            type: 'object',
+            type: "object",
             properties: {
               find: {
-                type: 'string',
-                description: 'Text to find (exact match)',
+                type: "string",
+                description: "Text to find (exact match)",
               },
               replace: {
-                type: 'string',
-                description: 'Replacement text',
+                type: "string",
+                description: "Replacement text",
               },
               replaceAll: {
-                type: 'boolean',
-                description: 'Replace all occurrences (default: true)',
+                type: "boolean",
+                description: "Replace all occurrences (default: true)",
                 default: true,
               },
             },
-            required: ['find', 'replace'],
+            required: ["find", "replace"],
           },
-          description: 'Array of find-and-replace operations to apply',
+          description: "Array of find-and-replace operations to apply",
         },
       },
-      required: ['guid', 'replacements'],
+      required: ["guid", "replacements"],
     },
   },
 ];
@@ -894,7 +1001,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     currentApi: api,
     ensureAPI: ensureAPIForToolDescriptions,
     refreshNotebookCache,
-    logError: message => console.error(message),
+    logError: (message) => console.error(message),
   });
 
   return { tools: enrichToolsWithNotebookDescriptions(tools, notebookCache) };
@@ -911,13 +1018,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (error: any) {
     if (error instanceof ZodError) {
       const issues = error.issues
-        .map(i => {
-          const issuePath = i.path.length > 0 ? i.path.join('.') : '(root)';
+        .map((i) => {
+          const issuePath = i.path.length > 0 ? i.path.join(".") : "(root)";
           return `${issuePath}: ${i.message}`;
         })
-        .join('; ');
+        .join("; ");
       return {
-        content: [{ type: 'text', text: `Validation error: ${issues}` }],
+        content: [{ type: "text", text: `Validation error: ${issues}` }],
         isError: true,
       };
     }
@@ -926,31 +1033,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     // Handle auth revocation specially
-    if (name === 'evernote_revoke_auth') {
+    if (name === "evernote_revoke_auth") {
       await oauth.revokeToken();
       api = null;
       apiInitError = null;
       lastInitAttempt = 0;
+      clearEntityCaches();
       return {
         content: [
           {
-            type: 'text',
-            text: 'Authentication token revoked. You will need to re-authenticate on next use.',
+            type: "text",
+            text: "Authentication token revoked. You will need to re-authenticate on next use.",
           },
         ],
       };
     }
-    
+
     // Handle reconnect specially
-    if (name === 'evernote_reconnect') {
-      console.error('Force reconnect requested');
+    if (name === "evernote_reconnect") {
+      console.error("Force reconnect requested");
       try {
         await ensureAPI(true); // Force reinitialization
         return {
           content: [
             {
-              type: 'text',
-              text: '✅ Successfully reconnected to Evernote',
+              type: "text",
+              text: "✅ Successfully reconnected to Evernote",
             },
           ],
         };
@@ -958,66 +1066,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
             },
           ],
         };
       }
     }
-    
+
     // Handle polling tools
-    if (name === 'evernote_start_polling') {
+    if (name === "evernote_start_polling") {
       startPolling();
       const status = getPollingStatus();
       return {
         content: [
           {
-            type: 'text',
-            text: `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
-                  `Webhook: ${WEBHOOK_URL || 'Not configured'}\n\n` +
-                  `Changes will be detected and sent to the webhook URL when found.`,
+            type: "text",
+            text:
+              `✅ Polling started\n\nInterval: Every ${status.intervalMinutes} minutes\n` +
+              `Webhook: ${WEBHOOK_URL || "Not configured"}\n\n` +
+              `Changes will be detected and sent to the webhook URL when found.`,
           },
         ],
       };
     }
-    
-    if (name === 'evernote_stop_polling') {
+
+    if (name === "evernote_stop_polling") {
       stopPolling();
       return {
         content: [
           {
-            type: 'text',
-            text: '✅ Polling stopped',
+            type: "text",
+            text: "✅ Polling stopped",
           },
         ],
       };
     }
-    
-    if (name === 'evernote_poll_now') {
+
+    if (name === "evernote_poll_now") {
       try {
         const changes = await pollOnce();
         if (changes.length === 0) {
           return {
             content: [
               {
-                type: 'text',
-                text: '✅ Poll complete - no changes detected',
+                type: "text",
+                text: "✅ Poll complete - no changes detected",
               },
             ],
           };
         }
-        
-        const changesSummary = changes.map(c => 
-          `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`
-        ).join('\n');
-        
+
+        const changesSummary = changes
+          .map((c) => `- ${c.type}: ${c.title || c.guid} (${c.timestamp})`)
+          .join("\n");
+
         return {
           content: [
             {
-              type: 'text',
-              text: `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
-                    (WEBHOOK_URL ? 'Webhook notification sent.' : 'No webhook configured - changes not sent.'),
+              type: "text",
+              text:
+                `✅ Poll complete - ${changes.length} changes detected:\n\n${changesSummary}\n\n` +
+                (WEBHOOK_URL
+                  ? "Webhook notification sent."
+                  : "No webhook configured - changes not sent."),
             },
           ],
         };
@@ -1025,20 +1137,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `❌ Poll failed: ${error.message}`,
             },
           ],
         };
       }
     }
-    
-    if (name === 'evernote_polling_status') {
+
+    if (name === "evernote_polling_status") {
       const status = getPollingStatus();
       return {
         content: [
           {
-            type: 'text',
+            type: "text",
             text: JSON.stringify(status, null, 2),
           },
         ],
@@ -1049,7 +1161,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const evernoteApi = await ensureAPI();
 
     switch (name) {
-      case 'evernote_create_note': {
+      case "evernote_create_note": {
         const { title, content, notebookName, tags } = validatedArgs;
 
         let notebookGuid: string | undefined;
@@ -1058,21 +1170,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (notebookName) {
           const notebooks = await evernoteApi.listNotebooks();
           notebookCache = notebooks;
-          const notebook = notebooks.find(nb => nb.name === notebookName);
+          const notebook = notebooks.find((nb) => nb.name === notebookName);
           if (notebook) {
             notebookGuid = notebook.guid;
           } else {
             // Notebook doesn't exist — auto-create it
             try {
-              const newNotebook = await evernoteApi.createNotebook(notebookName);
+              const newNotebook =
+                await evernoteApi.createNotebook(notebookName);
               notebookGuid = newNotebook.guid;
               notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-              notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+              clearEntityCaches();
             } catch (createError) {
               // Auto-create failed — fall back to the default notebook
-              const defaultNb = notebooks.find(nb => nb.defaultNotebook);
+              const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
               notebookGuid = defaultNb?.guid;
-              const fallbackName = defaultNb?.name || 'the default notebook';
+              const fallbackName = defaultNb?.name || "the default notebook";
               notebookWarning =
                 `Notebook "${notebookName}" does not exist and could not be auto-created ` +
                 `(${errorMessage(createError)}). Note was placed in "${fallbackName}" instead.`;
@@ -1091,21 +1204,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
-              text: notebookWarning ? `${resultText}\n\n⚠️ ${notebookWarning}` : resultText,
+              type: "text",
+              text: notebookWarning
+                ? `${resultText}\n\n⚠️ ${notebookWarning}`
+                : resultText,
             },
           ],
         };
       }
 
-      case 'evernote_search_notes': {
-        const { query, notebookName, maxResults = 20, includePreview = false } = validatedArgs;
+      case "evernote_search_notes": {
+        const {
+          query,
+          notebookName,
+          maxResults = 20,
+          includePreview = false,
+        } = validatedArgs;
 
         // Find notebook GUID if name provided
         let notebookGuid: string | undefined;
         if (notebookName) {
           const notebooks = await evernoteApi.listNotebooks();
-          const notebook = notebooks.find(nb => nb.name === notebookName);
+          const notebook = notebooks.find((nb) => nb.name === notebookName);
           if (notebook) {
             notebookGuid = notebook.guid;
           }
@@ -1119,73 +1239,94 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Build tag lookup map (tagGuid -> tagName) - single API call
         let tagMap: Map<string, string> | undefined;
-        const hasAnyTags = results.notes.some((note: any) => note.tagGuids && note.tagGuids.length > 0);
+        const hasAnyTags = results.notes.some(
+          (note: any) => note.tagGuids && note.tagGuids.length > 0,
+        );
         if (hasAnyTags) {
           const tags = await evernoteApi.listTags();
-          tagMap = new Map(tags.map(t => [t.guid!, t.name!]));
+          tagMap = new Map(tags.map((t) => [t.guid!, t.name!]));
         }
 
         // Build enhanced note results
-        const notes = await Promise.all(results.notes.map(async (note: any) => {
-          const enhanced: any = {
-            guid: note.guid,
-            title: note.title,
-            created: new Date(note.created).toISOString(),
-            updated: new Date(note.updated).toISOString(),
-            contentLength: note.contentLength,
-            notebookGuid: note.notebookGuid,
-          };
+        const notes = await Promise.all(
+          results.notes.map(async (note: any) => {
+            const enhanced: any = {
+              guid: note.guid,
+              title: note.title,
+              created: new Date(note.created).toISOString(),
+              updated: new Date(note.updated).toISOString(),
+              contentLength: note.contentLength,
+              notebookGuid: note.notebookGuid,
+            };
 
-          // Resolve tag names from GUIDs
-          if (note.tagGuids && note.tagGuids.length > 0 && tagMap) {
-            enhanced.tags = note.tagGuids
-              .map((guid: string) => tagMap!.get(guid))
-              .filter(Boolean);
-          }
-
-          // Include useful attributes if present
-          if (note.attributes) {
-            if (note.attributes.sourceURL) {
-              enhanced.sourceURL = note.attributes.sourceURL;
+            // Resolve tag names from GUIDs
+            if (note.tagGuids && note.tagGuids.length > 0 && tagMap) {
+              enhanced.tags = note.tagGuids
+                .map((guid: string) => tagMap!.get(guid))
+                .filter(Boolean);
             }
-            if (note.attributes.author) {
-              enhanced.author = note.attributes.author;
-            }
-          }
 
-          // Fetch content preview if requested
-          if (includePreview) {
-            try {
-              const preview = await evernoteApi.getNotePreview(note.guid, 300);
-              if (preview) {
-                enhanced.preview = preview;
+            // Include useful attributes if present
+            if (note.attributes) {
+              if (note.attributes.sourceURL) {
+                enhanced.sourceURL = note.attributes.sourceURL;
               }
-            } catch (e) {
-              // Skip preview on error, don't fail the whole search
-              console.error(`Failed to get preview for note ${note.guid}: ${(e as Error).message}`);
+              if (note.attributes.author) {
+                enhanced.author = note.attributes.author;
+              }
             }
-          }
 
-          return enhanced;
-        }));
+            // Fetch content preview if requested
+            if (includePreview) {
+              try {
+                const preview = await evernoteApi.getNotePreview(
+                  note.guid,
+                  300,
+                );
+                if (preview) {
+                  enhanced.preview = preview;
+                }
+              } catch (e) {
+                // Skip preview on error, don't fail the whole search
+                console.error(
+                  `Failed to get preview for note ${note.guid}: ${(e as Error).message}`,
+                );
+              }
+            }
+
+            return enhanced;
+          }),
+        );
 
         return {
           content: [
             {
-              type: 'text',
-              text: JSON.stringify({
-                totalNotes: results.totalNotes,
-                notes: notes,
-              }, null, 2),
+              type: "text",
+              text: JSON.stringify(
+                {
+                  totalNotes: results.totalNotes,
+                  notes: notes,
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
       }
 
-      case 'evernote_get_note': {
-        const { guid, includeContent = true, includePdfContent = true } = validatedArgs;
+      case "evernote_get_note": {
+        const {
+          guid,
+          includeContent = true,
+          includePdfContent = true,
+        } = validatedArgs;
         // Fetch resources whenever PDF text/resource metadata is wanted, independent of includeContent.
-        const note = await evernoteApi.getNote(guid, includeContent, includePdfContent);
+        const note = await evernoteApi.getNote(
+          guid,
+          includeContent,
+          includePdfContent,
+        );
 
         const result: any = {
           guid: note.guid,
@@ -1200,7 +1341,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           result.notebookGuid = note.notebookGuid;
           try {
             const notebooks = await getCachedNotebooks(evernoteApi);
-            const nb = notebooks.find(n => n.guid === note.notebookGuid);
+            const nb = notebooks.find((n) => n.guid === note.notebookGuid);
             if (nb) {
               result.notebookName = nb.name;
             }
@@ -1210,7 +1351,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (includeContent && note.content) {
-          result.content = evernoteApi.convertENMLToMarkdown(note.content, note.resources);
+          result.content = evernoteApi.convertENMLToMarkdown(
+            note.content,
+            note.resources,
+          );
         }
 
         if (note.tagNames) {
@@ -1230,9 +1374,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               size: r.data?.size || 0,
             };
 
-            if (includePdfContent && r.mime === 'application/pdf' && r.guid) {
+            if (includePdfContent && r.mime === "application/pdf" && r.guid) {
               // Reuse the resource body already fetched with the note (no second download).
-              resourceInfo.pdfText = await evernoteApi.extractPdfTextFromResource(r.guid, r);
+              resourceInfo.pdfText =
+                await evernoteApi.extractPdfTextFromResource(r.guid, r);
             }
 
             resources.push(resourceInfo);
@@ -1243,15 +1388,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(result, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_update_note': {
-        const { guid, title, content, notebookName, tags, forceUpdate = false } = validatedArgs;
+      case "evernote_update_note": {
+        const {
+          guid,
+          title,
+          content,
+          notebookName,
+          tags,
+          forceUpdate = false,
+        } = validatedArgs;
 
         console.error(`Updating note ${guid}`);
 
@@ -1278,20 +1430,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (notebookName !== undefined) {
             const notebooks = await evernoteApi.listNotebooks();
             notebookCache = notebooks;
-            const notebook = notebooks.find(nb => nb.name === notebookName);
+            const notebook = notebooks.find((nb) => nb.name === notebookName);
             if (notebook) {
               note.notebookGuid = notebook.guid;
             } else {
               // Auto-create the notebook
               try {
-                const newNotebook = await evernoteApi.createNotebook(notebookName);
+                const newNotebook =
+                  await evernoteApi.createNotebook(notebookName);
                 note.notebookGuid = newNotebook.guid;
                 notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-                notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+                clearEntityCaches();
               } catch (createError) {
-                const defaultNb = notebooks.find(nb => nb.defaultNotebook);
+                const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
                 note.notebookGuid = defaultNb?.guid;
-                const fallbackName = defaultNb?.name || 'the default notebook';
+                const fallbackName = defaultNb?.name || "the default notebook";
                 notebookWarning =
                   `Notebook "${notebookName}" does not exist and could not be auto-created ` +
                   `(${errorMessage(createError)}). Note was moved to "${fallbackName}" instead.`;
@@ -1306,41 +1459,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return {
             content: [
               {
-                type: 'text',
-                text: notebookWarning ? `${resultText}\n\n⚠️ ${notebookWarning}` : resultText,
+                type: "text",
+                text: notebookWarning
+                  ? `${resultText}\n\n⚠️ ${notebookWarning}`
+                  : resultText,
               },
             ],
           };
         } catch (stepError: any) {
-          console.error(`Update failed for ${guid}: code=${stepError.errorCode || 'none'}`);
-          
+          console.error(
+            `Update failed for ${guid}: code=${stepError.errorCode || "none"}`,
+          );
+
           // Handle RTE room conflict with forceUpdate option (requires confirmation)
           if (stepError.errorCode === 19 && forceUpdate) {
-            console.error(`DESTRUCTIVE: Force update triggered for ${guid} - will delete original and create replacement`);
+            console.error(
+              `DESTRUCTIVE: Force update triggered for ${guid} - will delete original and create replacement`,
+            );
             try {
               // Get the original note again for force update
               const originalNote = await evernoteApi.getNote(guid, true, true);
-              
+
               // Create a new note with updated content
               const newNote = await evernoteApi.createNote({
                 title: title || originalNote.title,
-                content: content || evernoteApi.convertENMLToMarkdown(originalNote.content, originalNote.resources),
-                notebookGuid: forceUpdateNotebookGuid || originalNote.notebookGuid,
+                content:
+                  content ||
+                  evernoteApi.convertENMLToMarkdown(
+                    originalNote.content,
+                    originalNote.resources,
+                  ),
+                notebookGuid:
+                  forceUpdateNotebookGuid || originalNote.notebookGuid,
                 tagNames: tags || originalNote.tagNames,
               });
-              
+
               // Delete the old note
               await evernoteApi.deleteNote(guid);
-              
+
               return {
                 content: [
                   {
-                    type: 'text',
-                    text: `⚠️ Note update forced by creating new note due to edit lock!\n` +
-                          `Original GUID: ${guid}\n` +
-                          `New GUID: ${newNote.guid}\n` +
-                          `Title: ${newNote.title}\n\n` +
-                          `The original note was deleted and replaced with an updated version.`,
+                    type: "text",
+                    text:
+                      `⚠️ Note update forced by creating new note due to edit lock!\n` +
+                      `Original GUID: ${guid}\n` +
+                      `New GUID: ${newNote.guid}\n` +
+                      `Title: ${newNote.title}\n\n` +
+                      `The original note was deleted and replaced with an updated version.`,
                   },
                 ],
               };
@@ -1350,118 +1516,122 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               stepError.message += `\n\nForce update also failed: ${forceErrorMessage}`;
             }
           }
-          
+
           throw stepError;
         }
       }
 
-      case 'evernote_delete_note': {
+      case "evernote_delete_note": {
         const { guid } = validatedArgs;
         await evernoteApi.deleteNote(guid);
-        
+
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `Note ${guid} deleted successfully`,
             },
           ],
         };
       }
 
-      case 'evernote_list_notebooks': {
+      case "evernote_list_notebooks": {
         const notebooks = await getCachedNotebooks(evernoteApi);
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(notebooks, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_create_notebook': {
+      case "evernote_create_notebook": {
         const { name, stack } = validatedArgs;
         const notebook = await evernoteApi.createNotebook(name, stack);
-        notebookCache = null; // new notebook exists; refresh on next read
-        
+        clearEntityCaches();
+
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `Notebook created successfully!\nGUID: ${notebook.guid}\nName: ${notebook.name}`,
             },
           ],
         };
       }
 
-      case 'evernote_list_tags': {
+      case "evernote_list_tags": {
         const tags = await getCachedTags(evernoteApi);
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(tags, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_create_tag': {
+      case "evernote_create_tag": {
         const { name, parentTagName } = validatedArgs;
-        
+
         // Find parent tag GUID if name provided
         let parentGuid: string | undefined;
         if (parentTagName) {
           const tags = await evernoteApi.listTags();
-          const parentTag = tags.find(t => t.name === parentTagName);
+          const parentTag = tags.find((t) => t.name === parentTagName);
           if (parentTag) {
             parentGuid = parentTag.guid;
           }
         }
 
         const tag = await evernoteApi.createTag(name, parentGuid);
-        tagCache = null; // new tag exists; refresh on next read
-        
+        clearEntityCaches();
+
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `Tag created successfully!\nGUID: ${tag.guid}\nName: ${tag.name}`,
             },
           ],
         };
       }
 
-      case 'evernote_get_user_info': {
+      case "evernote_get_user_info": {
         const [user, quota] = await Promise.all([
           evernoteApi.getUser(),
           evernoteApi.getQuotaInfo(),
         ]);
-        
+
         return {
           content: [
             {
-              type: 'text',
-              text: JSON.stringify({
-                user: {
-                  id: user.id,
-                  username: user.username,
-                  email: user.email,
-                  name: user.name,
+              type: "text",
+              text: JSON.stringify(
+                {
+                  user: {
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    name: user.name,
+                  },
+                  quota: quota,
                 },
-                quota: quota,
-              }, null, 2),
+                null,
+                2,
+              ),
             },
           ],
         };
       }
 
       // Resource tools
-      case 'evernote_get_resource': {
+      case "evernote_get_resource": {
         const { guid, includeData = true } = validatedArgs;
         const resource = await evernoteApi.getResource(guid, includeData);
 
@@ -1471,87 +1641,92 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           mimeType: resource.mime,
           size: resource.data?.size || 0,
           hash: resource.data?.bodyHash
-            ? Buffer.from(resource.data.bodyHash).toString('hex')
-            : '',
+            ? Buffer.from(resource.data.bodyHash).toString("hex")
+            : "",
         };
 
         if (includeData && resource.data?.body) {
-          result.data = Buffer.from(resource.data.body).toString('base64');
+          result.data = Buffer.from(resource.data.body).toString("base64");
         }
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(result, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_list_note_resources': {
+      case "evernote_list_note_resources": {
         const { noteGuid } = validatedArgs;
         const resources = await evernoteApi.listNoteResources(noteGuid);
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(resources, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_add_resource_to_note': {
+      case "evernote_add_resource_to_note": {
         const { noteGuid, filePath, filename } = validatedArgs;
-        const updatedNote = await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
+        const updatedNote = await evernoteApi.addResourceToNote(
+          noteGuid,
+          filePath,
+          filename,
+        );
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: `✅ Resource added successfully!\nNote GUID: ${updatedNote.guid}\nNote Title: ${updatedNote.title}`,
             },
           ],
         };
       }
 
-      case 'evernote_get_resource_recognition': {
+      case "evernote_get_resource_recognition": {
         const { resourceGuid } = validatedArgs;
-        const recognition = await evernoteApi.getResourceRecognition(resourceGuid);
+        const recognition =
+          await evernoteApi.getResourceRecognition(resourceGuid);
 
         // Extract just the text for a summary
         const allText = recognition.items
-          .map(item => item.alternatives[0]?.text)
+          .map((item) => item.alternatives[0]?.text)
           .filter(Boolean)
-          .join(' ');
+          .join(" ");
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(
                 {
                   ...recognition,
-                  extractedText: allText || '(no text recognized)',
+                  extractedText: allText || "(no text recognized)",
                 },
                 null,
-                2
+                2,
               ),
             },
           ],
         };
       }
 
-      case 'evernote_get_resource_text': {
+      case "evernote_get_resource_text": {
         const { resourceGuid } = validatedArgs;
         const text = await evernoteApi.extractPdfTextFromResource(resourceGuid);
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text,
             },
           ],
@@ -1559,11 +1734,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Notebook get/update tools
-      case 'evernote_get_notebook': {
+      case "evernote_get_notebook": {
         const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
-          throw new Error('Either name or guid must be provided');
+          throw new Error("Either name or guid must be provided");
         }
 
         let notebook;
@@ -1571,7 +1746,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           notebook = await evernoteApi.getNotebook(guid);
         } else {
           const notebooks = await evernoteApi.listNotebooks();
-          notebook = notebooks.find(nb => nb.name === name);
+          notebook = notebooks.find((nb) => nb.name === name);
           if (!notebook) {
             throw new Error(`Notebook '${name}' not found`);
           }
@@ -1582,14 +1757,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(notebook, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_update_notebook': {
+      case "evernote_update_notebook": {
         const { guid, name, stack } = validatedArgs;
         const notebook = await evernoteApi.getNotebook(guid);
 
@@ -1601,24 +1776,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updatedNotebook = await evernoteApi.updateNotebook(notebook);
-        notebookCache = null; // notebook changed; refresh on next read
+        clearEntityCaches();
 
         return {
           content: [
             {
-              type: 'text',
-              text: `✅ Notebook updated!\nGUID: ${updatedNotebook.guid}\nName: ${updatedNotebook.name}\nStack: ${updatedNotebook.stack || '(none)'}`,
+              type: "text",
+              text: `✅ Notebook updated!\nGUID: ${updatedNotebook.guid}\nName: ${updatedNotebook.name}\nStack: ${updatedNotebook.stack || "(none)"}`,
             },
           ],
         };
       }
 
       // Tag get/update tools
-      case 'evernote_get_tag': {
+      case "evernote_get_tag": {
         const { name, guid } = validatedArgs;
 
         if (!name && !guid) {
-          throw new Error('Either name or guid must be provided');
+          throw new Error("Either name or guid must be provided");
         }
 
         let tag;
@@ -1626,7 +1801,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           tag = await evernoteApi.getTag(guid);
         } else {
           const tags = await evernoteApi.listTags();
-          tag = tags.find(t => t.name === name);
+          tag = tags.find((t) => t.name === name);
           if (!tag) {
             throw new Error(`Tag '${name}' not found`);
           }
@@ -1637,14 +1812,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(tag, null, 2),
             },
           ],
         };
       }
 
-      case 'evernote_update_tag': {
+      case "evernote_update_tag": {
         const { guid, name, parentTagName } = validatedArgs;
         const tag = await evernoteApi.getTag(guid);
 
@@ -1652,11 +1827,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           tag.name = name;
         }
         if (parentTagName !== undefined) {
-          if (parentTagName === '') {
+          if (parentTagName === "") {
             tag.parentGuid = null; // Remove parent
           } else {
             const tags = await evernoteApi.listTags();
-            const parentTag = tags.find(t => t.name === parentTagName);
+            const parentTag = tags.find((t) => t.name === parentTagName);
             if (!parentTag) {
               throw new Error(`Parent tag '${parentTagName}' not found`);
             }
@@ -1665,29 +1840,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updatedTag = await evernoteApi.updateTag(tag);
-        tagCache = null; // tag changed; refresh on next read
+        clearEntityCaches();
 
         return {
           content: [
             {
-              type: 'text',
-              text: `✅ Tag updated!\nGUID: ${updatedTag.guid}\nName: ${updatedTag.name}\nParent: ${updatedTag.parentGuid || '(none)'}`,
+              type: "text",
+              text: `✅ Tag updated!\nGUID: ${updatedTag.guid}\nName: ${updatedTag.name}\nParent: ${updatedTag.parentGuid || "(none)"}`,
             },
           ],
         };
       }
 
-      case 'evernote_patch_note': {
+      case "evernote_patch_note": {
         const { guid, replacements } = validatedArgs;
 
-        if (!replacements || !Array.isArray(replacements) || replacements.length === 0) {
-          throw new Error('At least one replacement must be provided');
+        if (
+          !replacements ||
+          !Array.isArray(replacements) ||
+          replacements.length === 0
+        ) {
+          throw new Error("At least one replacement must be provided");
         }
 
         // Validate each replacement has a non-empty find string
         for (const r of replacements) {
-          if (!r.find || typeof r.find !== 'string' || r.find.length === 0) {
-            throw new Error('Each replacement must have a non-empty "find" string');
+          if (!r.find || typeof r.find !== "string" || r.find.length === 0) {
+            throw new Error(
+              'Each replacement must have a non-empty "find" string',
+            );
           }
         }
 
@@ -1695,14 +1876,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Format the response
         const changesSummary = result.changes
-          .map(c => `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`)
-          .join('\n');
+          .map(
+            (c) =>
+              `  • "${c.find}" → found ${c.occurrences}x, replaced ${c.replaced}x`,
+          )
+          .join("\n");
 
         if (result.success) {
           return {
             content: [
               {
-                type: 'text',
+                type: "text",
                 text: `✅ Note patched successfully!\nGUID: ${result.noteGuid}\n\nChanges:\n${changesSummary}`,
               },
             ],
@@ -1711,7 +1895,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return {
             content: [
               {
-                type: 'text',
+                type: "text",
                 text: `⚠️ Note patch failed\nGUID: ${result.noteGuid}\nReason: ${result.warning}\n\nAttempted changes:\n${changesSummary}`,
               },
             ],
@@ -1719,15 +1903,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      case 'evernote_health_check': {
+      case "evernote_health_check": {
         const { verbose = false } = validatedArgs;
 
         // Basic server info
         const healthStatus: any = {
           server: {
-            name: 'mcp-evernote',
-            version: '1.2.3',
-            status: 'running',
+            name: "mcp-evernote",
+            version: "1.2.3",
+            status: "running",
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
           },
@@ -1735,10 +1919,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             consumerKeySet: !!CONSUMER_KEY,
             consumerSecretSet: !!CONSUMER_SECRET,
             environment: ENVIRONMENT,
-            isClaudeCode: oauth['isClaudeCode'],
+            isClaudeCode: oauth["isClaudeCode"],
           },
           authentication: {
-            status: 'checking',
+            status: "checking",
             apiInitialized: !!api,
             lastError: apiInitError,
           },
@@ -1749,15 +1933,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Check if we have tokens without initializing API
           const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
           const hasOAuthToken = !!process.env.OAUTH_TOKEN;
-          
+
           // Try to load token file
           let hasTokenFile = false;
           let tokenFileInfo: any = null;
           try {
-            const fs = await import('fs/promises');
-            const path = await import('path');
-            const tokenPath = path.join(process.cwd(), '.evernote-token.json');
-            const tokenData = await fs.readFile(tokenPath, 'utf-8');
+            const fs = await import("fs/promises");
+            const path = await import("path");
+            const tokenPath = path.join(process.cwd(), ".evernote-token.json");
+            const tokenData = await fs.readFile(tokenPath, "utf-8");
             const token = JSON.parse(tokenData);
             hasTokenFile = true;
             tokenFileInfo = {
@@ -1765,7 +1949,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               hasToken: !!token.token,
               hasNoteStoreUrl: !!token.noteStoreUrl,
               userId: token.userId,
-              expires: token.expires ? new Date(token.expires).toISOString() : null,
+              expires: token.expires
+                ? new Date(token.expires).toISOString()
+                : null,
               isExpired: token.expires ? token.expires < Date.now() : false,
             };
           } catch (e) {
@@ -1773,7 +1959,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
 
           healthStatus.authentication = {
-            status: 'checked',
+            status: "checked",
             apiInitialized: !!api,
             hasEnvToken,
             hasOAuthToken,
@@ -1786,25 +1972,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (api) {
             try {
               const user = await api.getUser();
-              healthStatus.authentication.status = 'authenticated';
+              healthStatus.authentication.status = "authenticated";
               healthStatus.authentication.user = {
                 id: user.id,
                 username: user.username,
               };
-              healthStatus.status = 'healthy';
+              healthStatus.status = "healthy";
             } catch (e) {
-              healthStatus.authentication.status = 'api_error';
+              healthStatus.authentication.status = "api_error";
               healthStatus.authentication.apiError = (e as Error).message;
-              healthStatus.status = 'unhealthy';
+              healthStatus.status = "unhealthy";
             }
           } else {
             // Try to initialize API if we haven't yet
             try {
               await ensureAPI();
-              healthStatus.authentication.status = 'authenticated';
+              healthStatus.authentication.status = "authenticated";
               healthStatus.authentication.apiInitialized = true;
-              healthStatus.status = 'healthy';
-              
+              healthStatus.status = "healthy";
+
               // Get user info if successful
               try {
                 const user = await api!.getUser();
@@ -1817,14 +2003,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 healthStatus.authentication.apiError = (e as Error).message;
               }
             } catch (e) {
-              healthStatus.authentication.status = 'not_authenticated';
+              healthStatus.authentication.status = "not_authenticated";
               healthStatus.authentication.initError = (e as Error).message;
-              healthStatus.status = 'needs_auth';
+              healthStatus.status = "needs_auth";
             }
           }
         } catch (error: any) {
           healthStatus.authentication.error = error.message;
-          healthStatus.status = 'error';
+          healthStatus.status = "error";
         }
 
         // Add diagnostic information if verbose
@@ -1834,8 +2020,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             nodeVersion: process.version,
             platform: process.platform,
             env: {
-              MCP_TRANSPORT: process.env.MCP_TRANSPORT || 'not set',
-              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || 'not set',
+              MCP_TRANSPORT: process.env.MCP_TRANSPORT || "not set",
+              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || "not set",
               hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
               hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
             },
@@ -1844,21 +2030,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Overall status determination
         if (!healthStatus.status) {
-          if (healthStatus.authentication.status === 'authenticated') {
-            healthStatus.status = 'healthy';
-          } else if (healthStatus.authentication.hasTokenFile || 
-                     healthStatus.authentication.hasEnvToken || 
-                     healthStatus.authentication.hasOAuthToken) {
-            healthStatus.status = 'auth_issue';
+          if (healthStatus.authentication.status === "authenticated") {
+            healthStatus.status = "healthy";
+          } else if (
+            healthStatus.authentication.hasTokenFile ||
+            healthStatus.authentication.hasEnvToken ||
+            healthStatus.authentication.hasOAuthToken
+          ) {
+            healthStatus.status = "auth_issue";
           } else {
-            healthStatus.status = 'needs_setup';
+            healthStatus.status = "needs_setup";
           }
         }
 
         return {
           content: [
             {
-              type: 'text',
+              type: "text",
               text: JSON.stringify(healthStatus, null, 2),
             },
           ],
@@ -1870,33 +2058,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (error: any) {
     // Check if it's an authentication error that we can retry
-    const isAuthError = 
-      error.message?.includes('Not connected') ||
-      error.message?.includes('Authentication required') ||
-      error.message?.includes('token') ||
-      error.message?.includes('AUTHENTICATION_EXPIRED') ||
+    const isAuthError =
+      error.message?.includes("Not connected") ||
+      error.message?.includes("Authentication required") ||
+      error.message?.includes("token") ||
+      error.message?.includes("AUTHENTICATION_EXPIRED") ||
       error.errorCode === 9; // Evernote auth expired error code
-    
+
     // If auth error and haven't retried yet, try once with forced reinit
-    if (isAuthError && name !== 'evernote_reconnect' && name !== 'evernote_health_check') {
-      console.error(`Auth error detected, attempting automatic recovery for ${name}...`);
+    if (
+      isAuthError &&
+      name !== "evernote_reconnect" &&
+      name !== "evernote_health_check"
+    ) {
+      console.error(
+        `Auth error detected, attempting automatic recovery for ${name}...`,
+      );
       try {
         // Force reinitialization
         await ensureAPI(true);
-        
+
         // Verify reconnection succeeded
         console.error(`Verifying reconnection after ${name} failure...`);
         await ensureAPI();
-        
+
         // Execute the same operation again (simplified - real implementation would need to rerun the switch)
         // For now, just inform user to retry
         return {
           content: [
             {
-              type: 'text',
-              text: `⚠️ Connection was lost but has been restored.\n\n` +
-                    `Original error: ${error.message}\n\n` +
-                    `Please retry your operation.`,
+              type: "text",
+              text:
+                `⚠️ Connection was lost but has been restored.\n\n` +
+                `Original error: ${error.message}\n\n` +
+                `Please retry your operation.`,
             },
           ],
         };
@@ -1905,10 +2100,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Continue with normal error handling below
       }
     }
-    
-    const timestamp = new Date().toISOString();
 
-    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}${error.rateLimitDuration ? ` rateLimitDuration=${error.rateLimitDuration}s` : ''}`);
+    const timestamp = new Date().toISOString();
+    const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+
+    console.error(
+      `Tool failed: ${name} at ${timestamp} - ${error.message}` +
+      `${errorCode ? ` (code: ${errorCode})` : ""}` +
+      `${rateLimitDuration ? ` rateLimitDuration=${rateLimitDuration}s` : ""}`,
+    );
 
     // Return error information without sensitive data. Surface Evernote's
     // rateLimitDuration (SECONDS) on rate-limit errors (errorCode 19) so callers
@@ -1916,12 +2116,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return {
       content: [
         {
-          type: 'text',
-          text: `Tool execution failed: ${name}\n\n` +
-                `Error: ${error.message}\n` +
-                `Timestamp: ${timestamp}` +
-                (error.errorCode ? `\nError code: ${error.errorCode}` : '') +
-                (error.rateLimitDuration ? `\nRate limit duration: ${error.rateLimitDuration}s` : ''),
+          type: "text",
+          text:
+            `Tool execution failed: ${name}\n\n` +
+            `Error: ${error.message}\n` +
+            `Timestamp: ${timestamp}` +
+            (errorCode ? `\nError code: ${errorCode}` : "") +
+            (rateLimitDuration
+              ? `\nRate limit duration: ${rateLimitDuration}s`
+              : ""),
         },
       ],
       isError: true,
@@ -1930,37 +2133,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // Handle unhandled rejections - log and exit
-process.on('unhandledRejection', (reason: any) => {
-  console.error('Fatal: Unhandled rejection - process will exit');
-  console.error('Reason:', reason?.message || reason);
+process.on("unhandledRejection", (reason: any) => {
+  console.error("Fatal: Unhandled rejection - process will exit");
+  console.error("Reason:", reason?.message || reason);
   // Allow time for logs to flush before exiting
   setTimeout(() => process.exit(1), 1000);
 });
 
 // Handle uncaught exceptions - log and exit
-process.on('uncaughtException', (error: Error) => {
-  console.error('Fatal: Uncaught exception - process will exit');
-  console.error('Error:', error.message);
+process.on("uncaughtException", (error: Error) => {
+  console.error("Fatal: Uncaught exception - process will exit");
+  console.error("Error:", error.message);
   // Allow time for logs to flush before exiting
   setTimeout(() => process.exit(1), 1000);
 });
 
 // Start server
 async function main() {
-  console.error('Starting Evernote MCP server...');
+  console.error("Starting Evernote MCP server...");
   console.error(`Environment: ${ENVIRONMENT}`);
-  console.error(`Polling: ${POLLING_ENABLED ? 'enabled' : 'disabled'} (interval: ${POLL_INTERVAL / 60000} min)`);
+  console.error(
+    `Polling: ${POLLING_ENABLED ? "enabled" : "disabled"} (interval: ${POLL_INTERVAL / 60000} min)`,
+  );
   if (WEBHOOK_URL) {
     console.error(`Webhook URL: ${WEBHOOK_URL}`);
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Evernote MCP server running on stdio');
-  
+  console.error("Evernote MCP server running on stdio");
+
   // Auto-start polling if enabled
   if (POLLING_ENABLED) {
-    console.error('Auto-starting polling...');
+    console.error("Auto-starting polling...");
     // Delay polling start to allow server to fully initialize
     setTimeout(() => {
       startPolling();
@@ -1969,6 +2174,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('Failed to start server:', error);
+  console.error("Failed to start server:", error);
   process.exit(1);
 });
