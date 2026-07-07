@@ -74,7 +74,7 @@ describe('logging sanitization (H4)', () => {
   describe('index.ts update note handler logging', () => {
     // Find the evernote_update_note case block
     const updateCaseBlock = indexSource.match(
-      /case 'evernote_update_note'[\s\S]*?(?=case 'evernote_delete_note')/,
+      /case ['"]evernote_update_note['"][\s\S]*?(?=case ['"]evernote_delete_note['"])/,
     );
 
     it('does not log note title during update', () => {

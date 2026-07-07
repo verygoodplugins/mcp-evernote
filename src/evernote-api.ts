@@ -168,6 +168,7 @@ export class EvernoteAPI {
       (enhancedError as any).originalError = error;
       (enhancedError as any).noteGuid = note.guid;
       (enhancedError as any).errorCode = error.errorCode;
+      (enhancedError as any).rateLimitDuration = error.rateLimitDuration;
       (enhancedError as any).parameter = error.parameter;
       (enhancedError as any).retriesAttempted = retryCount;
       
