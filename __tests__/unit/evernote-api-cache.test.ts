@@ -101,6 +101,34 @@ describe("EvernoteAPI note cache", () => {
     expect(getNote).toHaveBeenCalledTimes(2);
   });
 
+  it("re-fetches a stripped PDF resource body during extraction (cache-hit path)", async () => {
+    // On a cache hit the resource body is stripped, so the single-note handler
+    // passes a body-less PDF resource as `prefetched`. Extraction must re-fetch
+    // the body live rather than give up and return the fallback.
+    const getResource = jest.fn(async (..._args: any[]) => ({
+      guid: "r1",
+      mime: "application/pdf",
+      data: { size: 100, bodyHash: Buffer.from("h") },
+    }));
+    const api = makeApi({
+      getNote: jest.fn(),
+      getResource,
+      getResourceRecognition: jest.fn(async () => null),
+      getSyncState: jest.fn(async () => ({ updateCount: 1 })),
+      getFilteredSyncChunk: jest.fn(),
+    });
+
+    const strippedPdf = {
+      guid: "r1",
+      mime: "application/pdf",
+      data: { size: 100, bodyHash: Buffer.from("h") }, // body already stripped
+    };
+    await api.extractResourceText("r1", strippedPdf);
+
+    // getResource(guid, withData=true, ...) — the live re-fetch of the body.
+    expect(getResource).toHaveBeenCalledWith("r1", true, false, false, false);
+  });
+
   it("re-fetches a batch note when a caller-known USN is newer than the cached body", async () => {
     let calls = 0;
     const getNote = jest.fn(async (guid: string) => {
