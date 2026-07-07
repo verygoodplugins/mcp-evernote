@@ -81,6 +81,7 @@ let api: EvernoteAPI | null = null;
 let notebookCache: NotebookInfo[] | null = null;
 let notebookCacheAt = 0;
 const NOTEBOOK_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let notebookRefreshInFlight: Promise<NotebookInfo[]> | null = null;
 let lastToolDescriptionInitFailure = 0;
 
 function errorMessage(error: unknown): string {
@@ -95,6 +96,29 @@ function errorMessage(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function isAuthFailure(error: unknown): boolean {
+  const code = (error as { errorCode?: number })?.errorCode;
+  if (code === 9) {
+    return true;
+  }
+  const msg = errorMessage(error);
+  return /authentication required|token may be expired|invalid token|not connected/i.test(msg);
+}
+
+function clearNotebookCache(): void {
+  notebookCache = null;
+  notebookCacheAt = 0;
+  notebookRefreshInFlight = null;
+}
+
+function getEvernoteErrorMeta(error: any): { errorCode?: number; rateLimitDuration?: number } {
+  const original = error?.originalError ?? error;
+  return {
+    errorCode: error?.errorCode ?? original?.errorCode,
+    rateLimitDuration: error?.rateLimitDuration ?? original?.rateLimitDuration,
+  };
 }
 
 function canExtractAttachmentText(resource: any): boolean {
@@ -113,7 +137,10 @@ async function refreshNotebookCache(evernoteApi: EvernoteAPI): Promise<NotebookI
     return notebookCache;
   } catch (error) {
     console.error(`Failed to refresh notebook cache: ${errorMessage(error)}`);
-    return notebookCache;
+    if (notebookCache !== null && !isAuthFailure(error)) {
+      return notebookCache;
+    }
+    return null;
   }
 }
 
@@ -125,8 +152,29 @@ async function getCachedNotebooks(evernoteApi: EvernoteAPI): Promise<NotebookInf
   if (notebookCache !== null && now - notebookCacheAt < NOTEBOOK_CACHE_TTL_MS) {
     return notebookCache;
   }
-  const refreshed = await refreshNotebookCache(evernoteApi);
-  return refreshed ?? notebookCache ?? [];
+  if (notebookRefreshInFlight) {
+    return notebookRefreshInFlight;
+  }
+
+  notebookRefreshInFlight = (async () => {
+    try {
+      notebookCache = await evernoteApi.listNotebooks();
+      notebookCacheAt = Date.now();
+      return notebookCache;
+    } catch (error) {
+      if (notebookCache !== null && !isAuthFailure(error)) {
+        console.error(
+          `listNotebooks failed; serving stale notebook cache: ${errorMessage(error)}`,
+        );
+        return notebookCache;
+      }
+      throw error;
+    } finally {
+      notebookRefreshInFlight = null;
+    }
+  })();
+
+  return notebookRefreshInFlight;
 }
 
 async function ensureAPIForToolDescriptions(): Promise<EvernoteAPI> {
@@ -162,6 +210,7 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     api = null;
     apiInitError = null;
     lastInitAttempt = 0;
+    clearNotebookCache();
   }
   
   // If we have a working API, return it
@@ -904,6 +953,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       api = null;
       apiInitError = null;
       lastInitAttempt = 0;
+      clearNotebookCache();
       return {
         content: [
           {
@@ -1040,7 +1090,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const newNotebook = await evernoteApi.createNotebook(notebookName);
               notebookGuid = newNotebook.guid;
               notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-              notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+              clearNotebookCache();
             } catch (createError) {
               // Auto-create failed — fall back to the default notebook
               const defaultNb = notebooks.find(nb => nb.defaultNotebook);
@@ -1266,7 +1316,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const newNotebook = await evernoteApi.createNotebook(notebookName);
                 note.notebookGuid = newNotebook.guid;
                 notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-                notebookCache = [...notebooks, { guid: newNotebook.guid, name: notebookName }];
+                clearNotebookCache();
               } catch (createError) {
                 const defaultNb = notebooks.find(nb => nb.defaultNotebook);
                 note.notebookGuid = defaultNb?.guid;
@@ -1364,7 +1414,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'evernote_create_notebook': {
         const { name, stack } = validatedArgs;
         const notebook = await evernoteApi.createNotebook(name, stack);
-        
+        clearNotebookCache();
         return {
           content: [
             {
@@ -1575,6 +1625,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updatedNotebook = await evernoteApi.updateNotebook(notebook);
+        clearNotebookCache();
 
         return {
           content: [
@@ -1879,8 +1930,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     
     const timestamp = new Date().toISOString();
+    const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
 
-    console.error(`Tool failed: ${name} at ${timestamp} - ${error.message}${error.errorCode ? ` (code: ${error.errorCode})` : ''}${error.rateLimitDuration ? ` rateLimitDuration=${error.rateLimitDuration}s` : ''}`);
+    console.error(
+      `Tool failed: ${name} at ${timestamp} - ${error.message}` +
+      `${errorCode ? ` (code: ${errorCode})` : ''}` +
+      `${rateLimitDuration ? ` rateLimitDuration=${rateLimitDuration}s` : ''}`,
+    );
 
     // Return error information without sensitive data. Surface Evernote's
     // rateLimitDuration (SECONDS) on rate-limit errors (errorCode 19) so callers
@@ -1892,8 +1948,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: `Tool execution failed: ${name}\n\n` +
                 `Error: ${error.message}\n` +
                 `Timestamp: ${timestamp}` +
-                (error.errorCode ? `\nError code: ${error.errorCode}` : '') +
-                (error.rateLimitDuration ? `\nRate limit duration: ${error.rateLimitDuration}s` : ''),
+                (errorCode ? `\nError code: ${errorCode}` : '') +
+                (rateLimitDuration ? `\nRate limit duration: ${rateLimitDuration}s` : ''),
         },
       ],
       isError: true,

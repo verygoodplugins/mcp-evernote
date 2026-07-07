@@ -1,11 +1,11 @@
-import * as Evernote from 'evernote';
-import { createHash } from 'crypto';
+import * as Evernote from "evernote";
+import { createHash } from "crypto";
 import {
   markdownToENML,
   enmlToMarkdown,
   MarkdownAttachment,
   MarkdownExistingResource,
-} from './markdown.js';
+} from "./markdown.js";
 import {
   NoteContent,
   SearchParameters,
@@ -17,12 +17,12 @@ import {
   ResourceInfo,
   NoteReplacement,
   PatchNoteResult,
-} from './types.js';
-import { readFile } from 'fs/promises';
-import { basename, extname } from 'path';
-import * as cheerio from 'cheerio';
-import { validateLocalFilePath } from './path-security.js';
-import { extractPdfText } from './pdf-extract.js';
+} from "./types.js";
+import { readFile } from "fs/promises";
+import { basename, extname } from "path";
+import * as cheerio from "cheerio";
+import { validateLocalFilePath } from "./path-security.js";
+import { extractPdfText } from "./pdf-extract.js";
 
 export class EvernoteAPI {
   private noteStore: any;
@@ -51,14 +51,16 @@ export class EvernoteAPI {
     }
 
     if (noteContent.attributes) {
-      note.attributes = new EvernoteModule.Types.NoteAttributes(noteContent.attributes);
+      note.attributes = new EvernoteModule.Types.NoteAttributes(
+        noteContent.attributes,
+      );
     }
 
     const resources: any[] = [];
 
     const attachmentResources = this.buildResourcesFromAttachments(
       conversion.attachments,
-      EvernoteModule
+      EvernoteModule,
     );
     if (attachmentResources.length > 0) {
       resources.push(...attachmentResources);
@@ -66,7 +68,7 @@ export class EvernoteAPI {
 
     const explicitResources = this.buildExplicitResources(
       noteContent.resources,
-      EvernoteModule
+      EvernoteModule,
     );
     if (explicitResources.length > 0) {
       resources.push(...explicitResources);
@@ -79,15 +81,28 @@ export class EvernoteAPI {
     return await this.noteStore.createNote(note);
   }
 
-  async getNote(guid: string, withContent: boolean = true, withResources: boolean = false): Promise<any> {
-    return await this.noteStore.getNote(guid, withContent, withResources, false, false);
+  async getNote(
+    guid: string,
+    withContent: boolean = true,
+    withResources: boolean = false,
+  ): Promise<any> {
+    return await this.noteStore.getNote(
+      guid,
+      withContent,
+      withResources,
+      false,
+      false,
+    );
   }
 
   /**
    * Get a truncated plain text preview of a note's content.
    * Fetches the note content and converts ENML to plain text, truncating to maxLength.
    */
-  async getNotePreview(guid: string, maxLength: number = 300): Promise<string | null> {
+  async getNotePreview(
+    guid: string,
+    maxLength: number = 300,
+  ): Promise<string | null> {
     const note = await this.noteStore.getNote(guid, true, false, false, false);
     if (!note.content) {
       return null;
@@ -106,12 +121,12 @@ export class EvernoteAPI {
 
     // Find a good break point (word boundary)
     let truncated = plainText.substring(0, maxLength);
-    const lastSpace = truncated.lastIndexOf(' ');
+    const lastSpace = truncated.lastIndexOf(" ");
     if (lastSpace > maxLength * 0.7) {
       truncated = truncated.substring(0, lastSpace);
     }
 
-    return truncated + '...';
+    return truncated + "...";
   }
 
   /**
@@ -125,15 +140,15 @@ export class EvernoteAPI {
     const $ = cheerio.load(enmlContent);
 
     // Remove en-media tags (attachments) from the DOM
-    $('en-media').remove();
+    $("en-media").remove();
 
     // Extract text content (HTML/XML tags are not included)
     let text = $.text();
 
     // Normalize whitespace similar to the original implementation
-    text = text.replace(/\r\n/g, '\n');
-    text = text.replace(/\n\s*\n/g, '\n');
-    text = text.replace(/[ \t]+/g, ' ');
+    text = text.replace(/\r\n/g, "\n");
+    text = text.replace(/\n\s*\n/g, "\n");
+    text = text.replace(/[ \t]+/g, " ");
     text = text.trim();
 
     return text;
@@ -150,27 +165,32 @@ export class EvernoteAPI {
       console.error(`Note update successful for ${note.guid}`);
       return result;
     } catch (error: any) {
-      console.error(`Note update failed for ${note.guid}: code=${error.errorCode || 'none'} attempt=${retryCount + 1}/${maxRetries + 1}`);
-      
+      console.error(
+        `Note update failed for ${note.guid}: code=${error.errorCode || "none"} attempt=${retryCount + 1}/${maxRetries + 1}`,
+      );
+
       // Handle specific Evernote error codes
       if (error.errorCode === 19 && retryCount < maxRetries) {
         // Error code 19: RTE room already open - retry with exponential backoff
         const delay = baseDelay * Math.pow(2, retryCount);
         console.error(`RTE room conflict detected. Retrying in ${delay}ms...`);
-        
-        await new Promise(resolve => setTimeout(resolve, delay));
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
         return this.updateNote(note, retryCount + 1);
       }
-      
+
       // Enhanced error with context (no sensitive data like titles)
-      const enhancedError = new Error(`Failed to update note ${note.guid}: ${error.message}`);
-      enhancedError.name = error.name || 'EvernoteUpdateError';
+      const enhancedError = new Error(
+        `Failed to update note ${note.guid}: ${error.message}`,
+      );
+      enhancedError.name = error.name || "EvernoteUpdateError";
       (enhancedError as any).originalError = error;
       (enhancedError as any).noteGuid = note.guid;
       (enhancedError as any).errorCode = error.errorCode;
+      (enhancedError as any).rateLimitDuration = error.rateLimitDuration;
       (enhancedError as any).parameter = error.parameter;
       (enhancedError as any).retriesAttempted = retryCount;
-      
+
       throw enhancedError;
     }
   }
@@ -179,24 +199,31 @@ export class EvernoteAPI {
     await this.noteStore.deleteNote(guid);
   }
 
-  async patchNoteContent(guid: string, replacements: NoteReplacement[]): Promise<PatchNoteResult> {
+  async patchNoteContent(
+    guid: string,
+    replacements: NoteReplacement[],
+  ): Promise<PatchNoteResult> {
     // Validate inputs before performing I/O
     if (!replacements || replacements.length === 0) {
       return {
         success: false,
         noteGuid: guid,
         changes: [],
-        warning: 'No replacements provided',
+        warning: "No replacements provided",
       };
     }
 
     for (const replacement of replacements) {
-      if (!replacement.find || typeof replacement.find !== 'string' || replacement.find.length === 0) {
+      if (
+        !replacement.find ||
+        typeof replacement.find !== "string" ||
+        replacement.find.length === 0
+      ) {
         return {
           success: false,
           noteGuid: guid,
           changes: [],
-          warning: 'Empty find string in replacements',
+          warning: "Empty find string in replacements",
         };
       }
     }
@@ -208,14 +235,17 @@ export class EvernoteAPI {
     let markdown = this.convertENMLToMarkdown(note.content, note.resources);
 
     // Track changes
-    const changes: PatchNoteResult['changes'] = [];
+    const changes: PatchNoteResult["changes"] = [];
 
     // Apply replacements sequentially
     for (const replacement of replacements) {
       const { find, replace, replaceAll = true } = replacement;
 
       // Count occurrences
-      const regex = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      const regex = new RegExp(
+        find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "g",
+      );
       const matches = markdown.match(regex);
       const occurrences = matches ? matches.length : 0;
 
@@ -245,7 +275,7 @@ export class EvernoteAPI {
         success: false,
         noteGuid: guid,
         changes,
-        warning: 'No matches found for any replacement patterns',
+        warning: "No matches found for any replacement patterns",
       };
     }
 
@@ -256,7 +286,8 @@ export class EvernoteAPI {
         success: false,
         noteGuid: guid,
         changes,
-        warning: 'Replacement would result in empty note content - operation aborted',
+        warning:
+          "Replacement would result in empty note content - operation aborted",
       };
     }
 
@@ -301,7 +332,12 @@ export class EvernoteAPI {
     const offset = params.offset || 0;
     const maxNotes = params.maxNotes || 100;
 
-    return await this.noteStore.findNotesMetadata(filter, offset, maxNotes, spec);
+    return await this.noteStore.findNotesMetadata(
+      filter,
+      offset,
+      maxNotes,
+      spec,
+    );
   }
 
   // Notebook operations
@@ -376,7 +412,13 @@ export class EvernoteAPI {
 
   // Resource operations
   async getResource(guid: string, withData: boolean = true): Promise<any> {
-    return await this.noteStore.getResource(guid, withData, false, false, false);
+    return await this.noteStore.getResource(
+      guid,
+      withData,
+      false,
+      false,
+      false,
+    );
   }
 
   async getResourceRecognition(guid: string): Promise<RecognitionData> {
@@ -393,15 +435,20 @@ export class EvernoteAPI {
    * Falls back to a human-readable message if the resource is not a PDF, has no
    * text layer (e.g. scanned / image-only PDFs), or if the API call fails.
    */
-  async extractPdfTextFromResource(resourceGuid: string, prefetched?: any): Promise<string> {
+  async extractPdfTextFromResource(
+    resourceGuid: string,
+    prefetched?: any,
+  ): Promise<string> {
     try {
       const resource =
-        prefetched?.data?.body != null ? prefetched : await this.getResource(resourceGuid, true);
-      if (resource?.mime && resource.mime !== 'application/pdf') {
+        prefetched?.data?.body != null
+          ? prefetched
+          : await this.getResource(resourceGuid, true);
+      if (resource?.mime && resource.mime !== "application/pdf") {
         return `[Not a PDF resource (mime: ${resource.mime}) — text extraction only supports PDF attachments]`;
       }
       if (!resource?.data?.body) {
-        return '[PDF text extraction failed — no data available]';
+        return "[PDF text extraction failed — no data available]";
       }
       const buffer = Buffer.isBuffer(resource.data.body)
         ? resource.data.body
@@ -410,7 +457,7 @@ export class EvernoteAPI {
     } catch {
       // Covers resource fetch / API / network failures. Parse failures (incl.
       // scanned/image-only PDFs) are handled inside extractPdfText.
-      return '[PDF text extraction failed — could not retrieve the attachment]';
+      return "[PDF text extraction failed — could not retrieve the attachment]";
     }
   }
 
@@ -420,7 +467,10 @@ export class EvernoteAPI {
    * PDFs use local text-layer extraction via pdf-parse. Other resources use
    * Evernote's recognition XML when available, which covers image OCR.
    */
-  async extractResourceText(resourceGuid: string, prefetched?: any): Promise<string> {
+  async extractResourceText(
+    resourceGuid: string,
+    prefetched?: any,
+  ): Promise<string> {
     let resource: any;
     try {
       if (prefetched != null) {
@@ -428,35 +478,50 @@ export class EvernoteAPI {
       } else {
         // Metadata-only fetch for OCR paths; PDF text extraction needs the body.
         resource = await this.getResource(resourceGuid, false);
-        if (resource?.mime === 'application/pdf') {
+        if (resource?.mime === "application/pdf") {
           resource = await this.getResource(resourceGuid, true);
         }
       }
     } catch {
-      return '[Resource text extraction failed — could not retrieve the attachment]';
+      return "[Resource text extraction failed — could not retrieve the attachment]";
     }
 
-    if (resource?.mime === 'application/pdf') {
-      const pdfText = await this.extractPdfTextFromResource(resourceGuid, resource);
+    if (resource?.mime === "application/pdf") {
+      const pdfText = await this.extractPdfTextFromResource(
+        resourceGuid,
+        resource,
+      );
       if (!this.isPdfExtractionFallback(pdfText)) {
         return pdfText;
       }
 
-      const recognitionText = await this.extractRecognitionTextFromResource(resourceGuid, resource);
+      const recognitionText = await this.extractRecognitionTextFromResource(
+        resourceGuid,
+        resource,
+      );
       return recognitionText || pdfText;
     }
 
-    const recognitionText = await this.extractRecognitionTextFromResource(resourceGuid, resource);
+    const recognitionText = await this.extractRecognitionTextFromResource(
+      resourceGuid,
+      resource,
+    );
     if (recognitionText == null) {
-      const mime = resource?.mime ? ` (mime: ${resource.mime})` : '';
+      const mime = resource?.mime ? ` (mime: ${resource.mime})` : "";
       return `[No text extraction available for resource${mime}]`;
     }
 
-    return recognitionText || '[No OCR text recognized for resource]';
+    return recognitionText || "[No OCR text recognized for resource]";
   }
 
   async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {
-    const note = await this.noteStore.getNote(noteGuid, false, true, false, false);
+    const note = await this.noteStore.getNote(
+      noteGuid,
+      false,
+      true,
+      false,
+      false,
+    );
 
     if (!note.resources || note.resources.length === 0) {
       return [];
@@ -467,12 +532,18 @@ export class EvernoteAPI {
       filename: r.attributes?.fileName,
       mimeType: r.mime,
       size: r.data?.size || 0,
-      hash: r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : '',
+      hash: r.data?.bodyHash
+        ? Buffer.from(r.data.bodyHash).toString("hex")
+        : "",
       hasRecognition: !!r.recognition,
     }));
   }
 
-  async addResourceToNote(noteGuid: string, filePath: string, filename?: string): Promise<any> {
+  async addResourceToNote(
+    noteGuid: string,
+    filePath: string,
+    filename?: string,
+  ): Promise<any> {
     const EvernoteModule = (Evernote as any).default || Evernote;
 
     const resolvedPath = await validateLocalFilePath(filePath);
@@ -480,7 +551,7 @@ export class EvernoteAPI {
     // Read file
     const fileData = await readFile(resolvedPath);
     const hash = this.computeHash(fileData);
-    const hashHex = hash.toString('hex');
+    const hashHex = hash.toString("hex");
 
     // Determine MIME type from extension
     const ext = extname(filePath).toLowerCase();
@@ -488,7 +559,13 @@ export class EvernoteAPI {
     const displayName = filename || basename(filePath);
 
     // Get existing note with content and resources
-    const note = await this.noteStore.getNote(noteGuid, true, true, false, false);
+    const note = await this.noteStore.getNote(
+      noteGuid,
+      true,
+      true,
+      false,
+      false,
+    );
 
     // Create new resource
     const resource = new EvernoteModule.Types.Resource();
@@ -510,13 +587,19 @@ export class EvernoteAPI {
 
     // Append en-media tag to content before </en-note>
     const enMediaTag = `<en-media type="${mimeType}" hash="${hashHex}"/>`;
-    note.content = note.content.replace('</en-note>', `<br/>${enMediaTag}</en-note>`);
+    note.content = note.content.replace(
+      "</en-note>",
+      `<br/>${enMediaTag}</en-note>`,
+    );
 
     // Update note
     return await this.updateNote(note);
   }
 
-  private parseRecognitionXml(resourceGuid: string, xmlData: any): RecognitionData {
+  private parseRecognitionXml(
+    resourceGuid: string,
+    xmlData: any,
+  ): RecognitionData {
     const items: RecognitionItem[] = [];
 
     if (!xmlData) {
@@ -524,12 +607,14 @@ export class EvernoteAPI {
     }
 
     // Convert to string if it's a buffer
-    const xmlString = typeof xmlData === 'string'
-      ? xmlData
-      : Buffer.from(xmlData).toString('utf-8');
+    const xmlString =
+      typeof xmlData === "string"
+        ? xmlData
+        : Buffer.from(xmlData).toString("utf-8");
 
     // Parse <item> elements with bounding box attributes
-    const itemRegex = /<item\s+x="(\d+)"\s+y="(\d+)"\s+w="(\d+)"\s+h="(\d+)"[^>]*>([\s\S]*?)<\/item>/g;
+    const itemRegex =
+      /<item\s+x="(\d+)"\s+y="(\d+)"\s+w="(\d+)"\s+h="(\d+)"[^>]*>([\s\S]*?)<\/item>/g;
     let itemMatch;
 
     while ((itemMatch = itemRegex.exec(xmlString)) !== null) {
@@ -566,9 +651,9 @@ export class EvernoteAPI {
 
   extractTextFromRecognition(recognition: RecognitionData): string {
     return recognition.items
-      .map(item => item.alternatives[0]?.text)
+      .map((item) => item.alternatives[0]?.text)
       .filter(Boolean)
-      .join(' ');
+      .join(" ");
   }
 
   private recognitionXmlPayload(recognition: any): any {
@@ -581,48 +666,71 @@ export class EvernoteAPI {
     return recognition;
   }
 
+  private hasParseableRecognitionBody(recognition: any): boolean {
+    const payload = this.recognitionXmlPayload(recognition);
+    if (payload == null) {
+      return false;
+    }
+    if (typeof payload === 'string') {
+      return payload.length > 0;
+    }
+    if (Buffer.isBuffer(payload)) {
+      return payload.length > 0;
+    }
+    return false;
+  }
+
   private async extractRecognitionTextFromResource(
     resourceGuid: string,
-    resource: any
+    resource: any,
   ): Promise<string | null> {
-    try {
-      const recognition = resource?.recognition != null
-        ? this.parseRecognitionXml(resourceGuid, this.recognitionXmlPayload(resource.recognition))
-        : await this.getResourceRecognition(resourceGuid);
-
-      return this.extractTextFromRecognition(recognition);
-    } catch {
-      return null;
+    let recognition: RecognitionData;
+    if (
+      resource?.recognition != null &&
+      this.hasParseableRecognitionBody(resource.recognition)
+    ) {
+      recognition = this.parseRecognitionXml(
+        resourceGuid,
+        this.recognitionXmlPayload(resource.recognition),
+      );
+    } else {
+      recognition = await this.getResourceRecognition(resourceGuid);
     }
+
+    const text = this.extractTextFromRecognition(recognition);
+    return text || null;
   }
 
   private isPdfExtractionFallback(text: string): boolean {
-    return text.startsWith('[') && text.includes('PDF text extraction');
+    return text.startsWith("[") && text.includes("PDF text extraction");
   }
 
   private getMimeType(ext: string): string {
     const mimeTypes: Record<string, string> = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.pdf': 'application/pdf',
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.amr': 'audio/amr',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls': 'application/vnd.ms-excel',
-      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.ppt': 'application/vnd.ms-powerpoint',
-      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      '.txt': 'text/plain',
-      '.html': 'text/html',
-      '.xml': 'text/xml',
-      '.json': 'application/json',
-      '.zip': 'application/zip',
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".pdf": "application/pdf",
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".amr": "audio/amr",
+      ".doc": "application/msword",
+      ".docx":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".xls": "application/vnd.ms-excel",
+      ".xlsx":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".ppt": "application/vnd.ms-powerpoint",
+      ".pptx":
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ".txt": "text/plain",
+      ".html": "text/html",
+      ".xml": "text/xml",
+      ".json": "application/json",
+      ".zip": "application/zip",
     };
-    return mimeTypes[ext] || 'application/octet-stream';
+    return mimeTypes[ext] || "application/octet-stream";
   }
 
   // Sync operations
@@ -630,7 +738,11 @@ export class EvernoteAPI {
     return await this.noteStore.getSyncState();
   }
 
-  async getFilteredSyncChunk(afterUSN: number, maxEntries: number = 100, filter: any): Promise<any> {
+  async getFilteredSyncChunk(
+    afterUSN: number,
+    maxEntries: number = 100,
+    filter: any,
+  ): Promise<any> {
     const EvernoteModule = (Evernote as any).default || Evernote;
     const SyncChunkFilter = EvernoteModule.NoteStore?.SyncChunkFilter;
     const sdkFilter = SyncChunkFilter ? new SyncChunkFilter(filter) : filter;
@@ -638,12 +750,15 @@ export class EvernoteAPI {
     return await this.noteStore.getFilteredSyncChunk(
       afterUSN,
       maxEntries,
-      sdkFilter
+      sdkFilter,
     );
   }
 
   // Helper methods
-  convertMarkdownToENML(content: string, existingResources?: any[]): ReturnType<typeof markdownToENML> {
+  convertMarkdownToENML(
+    content: string,
+    existingResources?: any[],
+  ): ReturnType<typeof markdownToENML> {
     const normalized = this.normalizeExistingResources(existingResources);
     return markdownToENML(content, { existingResources: normalized });
   }
@@ -653,30 +768,40 @@ export class EvernoteAPI {
     return enmlToMarkdown(enmlContent, { resources: normalized });
   }
 
-  async applyMarkdownToNote(note: any, markdown: string, options?: { preserveResources?: boolean }): Promise<void> {
+  async applyMarkdownToNote(
+    note: any,
+    markdown: string,
+    options?: { preserveResources?: boolean },
+  ): Promise<void> {
     const EvernoteModule = (Evernote as any).default || Evernote;
-    const originalResources = options?.preserveResources ? (note.resources || []) : [];
+    const originalResources = options?.preserveResources
+      ? note.resources || []
+      : [];
 
     const conversion = this.convertMarkdownToENML(markdown, note.resources);
     note.content = this.wrapEnml(conversion.enml);
     const attachmentResources = this.buildResourcesFromAttachments(
       conversion.attachments,
-      EvernoteModule
+      EvernoteModule,
     );
 
     if (options?.preserveResources) {
       // Merge: start with original resources, add any new attachments
       const existingHashes = new Set(
-        originalResources.map((r: any) =>
-          r.data?.bodyHash ? Buffer.from(r.data.bodyHash).toString('hex') : null
-        ).filter(Boolean)
+        originalResources
+          .map((r: any) =>
+            r.data?.bodyHash
+              ? Buffer.from(r.data.bodyHash).toString("hex")
+              : null,
+          )
+          .filter(Boolean),
       );
 
       // Add new attachments that aren't already in original resources
       const mergedResources = [...originalResources];
       for (const resource of attachmentResources) {
         const hash = resource.data?.bodyHash
-          ? Buffer.from(resource.data.bodyHash).toString('hex')
+          ? Buffer.from(resource.data.bodyHash).toString("hex")
           : null;
         if (hash && !existingHashes.has(hash)) {
           mergedResources.push(resource);
@@ -700,14 +825,15 @@ export class EvernoteAPI {
 
   private wrapEnml(body: string): string {
     let enmlContent = '<?xml version="1.0" encoding="UTF-8"?>';
-    enmlContent += '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">';
+    enmlContent +=
+      '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">';
     enmlContent += `<en-note>${body}</en-note>`;
     return enmlContent;
   }
 
   private buildResourcesFromAttachments(
     attachments: MarkdownAttachment[],
-    EvernoteModule: any
+    EvernoteModule: any,
   ): any[] {
     if (!attachments || attachments.length === 0) {
       return [];
@@ -755,7 +881,10 @@ export class EvernoteAPI {
     return resources;
   }
 
-  private buildExplicitResources(resources: NoteContent['resources'], EvernoteModule: any): any[] {
+  private buildExplicitResources(
+    resources: NoteContent["resources"],
+    EvernoteModule: any,
+  ): any[] {
     if (!resources || resources.length === 0) {
       return [];
     }
@@ -769,7 +898,9 @@ export class EvernoteAPI {
       resource.mime = r.mimeType;
 
       if (r.filename || r.attributes) {
-        const attrs = new EvernoteModule.Types.ResourceAttributes(r.attributes || {});
+        const attrs = new EvernoteModule.Types.ResourceAttributes(
+          r.attributes || {},
+        );
         if (r.filename) {
           attrs.fileName = r.filename;
         }
@@ -780,7 +911,9 @@ export class EvernoteAPI {
     });
   }
 
-  private normalizeExistingResources(resources: any[] | undefined): MarkdownExistingResource[] {
+  private normalizeExistingResources(
+    resources: any[] | undefined,
+  ): MarkdownExistingResource[] {
     if (!resources || resources.length === 0) {
       return [];
     }
@@ -795,17 +928,18 @@ export class EvernoteAPI {
       const hashBuffer: Buffer | undefined = resource?.data?.bodyHash
         ? Buffer.from(resource.data.bodyHash)
         : resource?.data?.body
-        ? this.computeHash(Buffer.from(resource.data.body))
-        : undefined;
+          ? this.computeHash(Buffer.from(resource.data.body))
+          : undefined;
 
       if (!hashBuffer) {
         continue;
       }
 
       normalized.push({
-        hashHex: hashBuffer.toString('hex'),
+        hashHex: hashBuffer.toString("hex"),
         mimeType: resource.mime,
-        filename: resource?.attributes?.fileName || resource?.attributes?.filename,
+        filename:
+          resource?.attributes?.fileName || resource?.attributes?.filename,
         sourceURL: resource?.attributes?.sourceURL,
         resource,
       });
@@ -815,7 +949,7 @@ export class EvernoteAPI {
   }
 
   private computeHash(data: Buffer): Buffer {
-    return createHash('md5').update(data).digest();
+    return createHash("md5").update(data).digest();
   }
 
   // User info
