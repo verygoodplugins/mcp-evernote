@@ -23,14 +23,48 @@ import { basename, extname } from "path";
 import * as cheerio from "cheerio";
 import { validateLocalFilePath } from "./path-security.js";
 import { extractPdfText } from "./pdf-extract.js";
+import {
+  limitNoteStoreMethods,
+  resolveRpcLimitOptions,
+  RpcLimitOptions,
+} from "./concurrency.js";
+import { getEvernoteErrorMeta, RATE_LIMIT_ERROR_CODE } from "./errors.js";
+
+const UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS = [2000, 4000, 8000];
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableEditLock(error: any): boolean {
+  const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+  return (
+    errorCode === RATE_LIMIT_ERROR_CODE &&
+    (typeof rateLimitDuration !== "number" ||
+      !Number.isFinite(rateLimitDuration) ||
+      rateLimitDuration <= 0)
+  );
+}
 
 export class EvernoteAPI {
   private noteStore: any;
   private client: any;
+  private readonly sleep: (ms: number) => Promise<void>;
 
-  constructor(client: any, tokens: OAuthTokens) {
+  constructor(
+    client: any,
+    tokens: OAuthTokens,
+    options?: Partial<RpcLimitOptions>,
+  ) {
     this.client = client;
-    this.noteStore = client.getNoteStore(tokens.noteStoreUrl);
+    const rpcLimitOptions = resolveRpcLimitOptions(options);
+    this.sleep = rpcLimitOptions.sleep ?? defaultSleep;
+    // Gate every NoteStore RPC through a shared concurrency limiter with
+    // short-wait rate-limit auto-retry (see src/concurrency.ts).
+    this.noteStore = limitNoteStoreMethods(
+      client.getNoteStore(tokens.noteStoreUrl),
+      rpcLimitOptions,
+    );
   }
 
   // Note operations
@@ -155,9 +189,6 @@ export class EvernoteAPI {
   }
 
   async updateNote(note: any, retryCount: number = 0): Promise<any> {
-    const maxRetries = 3;
-    const baseDelay = 2000; // 2 seconds base delay
-
     try {
       console.error(`Updating note ${note.guid} (attempt ${retryCount + 1})`);
 
@@ -166,20 +197,23 @@ export class EvernoteAPI {
       return result;
     } catch (error: any) {
       console.error(
-        `Note update failed for ${note.guid}: code=${error.errorCode || "none"} attempt=${retryCount + 1}/${maxRetries + 1}`,
+        `Note update failed for ${note.guid}: code=${error.errorCode || "none"} attempt=${retryCount + 1}/${UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS.length + 1}`,
       );
 
-      // Handle specific Evernote error codes
-      if (error.errorCode === 19 && retryCount < maxRetries) {
-        // Error code 19: RTE room already open - retry with exponential backoff
-        const delay = baseDelay * Math.pow(2, retryCount);
+      if (
+        retryCount < UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS.length &&
+        isRetryableEditLock(error)
+      ) {
+        const delay = UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS[retryCount];
         console.error(`RTE room conflict detected. Retrying in ${delay}ms...`);
-
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await this.sleep(delay);
         return this.updateNote(note, retryCount + 1);
       }
 
-      // Enhanced error with context (no sensitive data like titles)
+      // Rate-limit (errorCode 19) retry is handled uniformly at the NoteStore
+      // RPC layer (src/concurrency.ts) for short waits; long waits surface as a
+      // structured error so the caller can reschedule. Here we only enrich the
+      // error with context (no sensitive data like titles).
       const enhancedError = new Error(
         `Failed to update note ${note.guid}: ${error.message}`,
       );

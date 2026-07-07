@@ -51,7 +51,7 @@ describe('logging sanitization (H4)', () => {
   describe('index.ts error handler logging', () => {
     // Extract the error handler block (the catch in CallToolRequestSchema)
     const errorHandlerBlock = indexSource.match(
-      /\/\/ Enhanced error|const timestamp = new Date[\s\S]*?isError: true,\s*\};/,
+      /const payload = buildToolErrorPayload[\s\S]*?isError: true,\s*\};/,
     );
 
     it('does not log full tool arguments', () => {

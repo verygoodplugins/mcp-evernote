@@ -13,6 +13,12 @@ import { EvernoteAPI } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
 import { computeWebhookSignature } from "./webhook.js";
+import { buildToolErrorPayload, getEvernoteErrorMeta } from "./errors.js";
+import {
+  DEFAULT_MAX_CONCURRENCY,
+  DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
+  RpcLimitOptions,
+} from "./concurrency.js";
 import {
   enrichToolsWithNotebookDescriptions,
   resolveNotebookCacheForToolDescriptions,
@@ -71,6 +77,20 @@ const POLL_INTERVAL = Math.max(
 const WEBHOOK_URL = process.env.EVERNOTE_WEBHOOK_URL; // URL to notify on changes
 const WEBHOOK_SECRET = process.env.EVERNOTE_WEBHOOK_SECRET; // HMAC signing secret
 const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
+
+// NoteStore RPC transport tuning. Bounding concurrency keeps a wide fan-out
+// from bursting past Evernote's hourly rate limit; short waits auto-retry.
+const RPC_LIMIT_OPTIONS: Partial<RpcLimitOptions> = {
+  maxConcurrency: parseInt(
+    process.env.EVERNOTE_MAX_CONCURRENCY || String(DEFAULT_MAX_CONCURRENCY),
+    10,
+  ),
+  rateLimitAutoRetrySeconds: parseInt(
+    process.env.EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS ||
+      String(DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS),
+    10,
+  ),
+};
 
 // Polling state
 let lastUpdateCount: number | null = null;
@@ -137,17 +157,6 @@ function clearEntityCaches(): void {
   tagRefreshInFlight = null;
   notebookCacheGeneration++;
   tagCacheGeneration++;
-}
-
-function getEvernoteErrorMeta(error: any): {
-  errorCode?: number;
-  rateLimitDuration?: number;
-} {
-  const original = error?.originalError ?? error;
-  return {
-    errorCode: error?.errorCode ?? original?.errorCode,
-    rateLimitDuration: error?.rateLimitDuration ?? original?.rateLimitDuration,
-  };
 }
 
 function canExtractAttachmentText(resource: any): boolean {
@@ -317,7 +326,7 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
   try {
     lastInitAttempt = now;
     const { client, tokens } = await oauth.getAuthenticatedClient();
-    api = new EvernoteAPI(client, tokens);
+    api = new EvernoteAPI(client, tokens, RPC_LIMIT_OPTIONS);
     apiInitError = null;
     console.error("API initialized successfully");
     // Seed notebook cache in the background so descriptions are ready for ListTools
@@ -2147,30 +2156,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    const timestamp = new Date().toISOString();
     const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+    const payload = buildToolErrorPayload(name, error);
 
     console.error(
-      `Tool failed: ${name} at ${timestamp} - ${error.message}` +
+      `Tool failed: ${name} at ${payload.timestamp} - ${error.message}` +
         `${errorCode ? ` (code: ${errorCode})` : ""}` +
         `${rateLimitDuration ? ` rateLimitDuration=${rateLimitDuration}s` : ""}`,
     );
 
-    // Return error information without sensitive data. Surface Evernote's
-    // rateLimitDuration (SECONDS) on rate-limit errors (errorCode 19) so callers
-    // can back off for the exact window instead of guessing.
+    // Return a machine-parseable JSON error (no sensitive data). On rate limits
+    // (errorCode 19) `error` is "rate_limited" and `retryAfterSeconds` carries
+    // Evernote's exact backoff window so an agent can reschedule precisely.
     return {
       content: [
         {
           type: "text",
-          text:
-            `Tool execution failed: ${name}\n\n` +
-            `Error: ${error.message}\n` +
-            `Timestamp: ${timestamp}` +
-            (errorCode ? `\nError code: ${errorCode}` : "") +
-            (rateLimitDuration
-              ? `\nRate limit duration: ${rateLimitDuration}s`
-              : ""),
+          text: JSON.stringify(payload, null, 2),
         },
       ],
       isError: true,
