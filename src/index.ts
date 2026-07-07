@@ -1255,7 +1255,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // return here; status + user fall through to ensureAPI and the switch case
     // below (preserving the old health_check/get_user_info gating exactly).
     if (name === "evernote_connection") {
-      const { action } = validatedArgs;
+      const { action, verbose = false } = validatedArgs;
 
       if (action === "revoke") {
         await oauth.revokeToken();
@@ -1295,6 +1295,148 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         }
+      }
+
+      // action === "status": health/diagnostic check. Handled here, before the
+      // global ensureAPI(), so it can report needs_auth / needs_setup for an
+      // unauthenticated server instead of erroring out. Self-contained: it
+      // probes tokens and attempts ensureAPI() internally.
+      if (action === "status") {
+        const healthStatus: any = {
+          server: {
+            name: "mcp-evernote",
+            version: "1.2.3",
+            status: "running",
+            environment: ENVIRONMENT,
+            timestamp: new Date().toISOString(),
+          },
+          configuration: {
+            consumerKeySet: !!CONSUMER_KEY,
+            consumerSecretSet: !!CONSUMER_SECRET,
+            environment: ENVIRONMENT,
+            isClaudeCode: oauth["isClaudeCode"],
+          },
+          authentication: {
+            status: "checking",
+            apiInitialized: !!api,
+            lastError: apiInitError,
+          },
+        };
+
+        try {
+          const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
+          const hasOAuthToken = !!process.env.OAUTH_TOKEN;
+
+          let hasTokenFile = false;
+          let tokenFileInfo: any = null;
+          try {
+            const fs = await import("fs/promises");
+            const path = await import("path");
+            const tokenPath = path.join(process.cwd(), ".evernote-token.json");
+            const tokenData = await fs.readFile(tokenPath, "utf-8");
+            const token = JSON.parse(tokenData);
+            hasTokenFile = true;
+            tokenFileInfo = {
+              exists: true,
+              hasToken: !!token.token,
+              hasNoteStoreUrl: !!token.noteStoreUrl,
+              userId: token.userId,
+              expires: token.expires
+                ? new Date(token.expires).toISOString()
+                : null,
+              isExpired: token.expires ? token.expires < Date.now() : false,
+            };
+          } catch (e) {
+            tokenFileInfo = { exists: false, error: (e as Error).message };
+          }
+
+          healthStatus.authentication = {
+            status: "checked",
+            apiInitialized: !!api,
+            hasEnvToken,
+            hasOAuthToken,
+            hasTokenFile,
+            tokenFileInfo: verbose ? tokenFileInfo : undefined,
+            lastError: apiInitError,
+          };
+
+          if (api) {
+            try {
+              const user = await api.getUser();
+              healthStatus.authentication.status = "authenticated";
+              healthStatus.authentication.user = {
+                id: user.id,
+                username: user.username,
+              };
+              healthStatus.status = "healthy";
+            } catch (e) {
+              healthStatus.authentication.status = "api_error";
+              healthStatus.authentication.apiError = (e as Error).message;
+              healthStatus.status = "unhealthy";
+            }
+          } else {
+            try {
+              await ensureAPI();
+              healthStatus.authentication.status = "authenticated";
+              healthStatus.authentication.apiInitialized = true;
+              healthStatus.status = "healthy";
+
+              try {
+                const user = await api!.getUser();
+                healthStatus.authentication.user = {
+                  id: user.id,
+                  username: user.username,
+                };
+              } catch (e) {
+                healthStatus.authentication.apiError = (e as Error).message;
+              }
+            } catch (e) {
+              healthStatus.authentication.status = "not_authenticated";
+              healthStatus.authentication.initError = (e as Error).message;
+              healthStatus.status = "needs_auth";
+            }
+          }
+        } catch (error: any) {
+          healthStatus.authentication.error = error.message;
+          healthStatus.status = "error";
+        }
+
+        if (verbose) {
+          healthStatus.diagnostics = {
+            cwd: process.cwd(),
+            nodeVersion: process.version,
+            platform: process.platform,
+            env: {
+              MCP_TRANSPORT: process.env.MCP_TRANSPORT || "not set",
+              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || "not set",
+              hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
+              hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
+            },
+          };
+        }
+
+        if (!healthStatus.status) {
+          if (healthStatus.authentication.status === "authenticated") {
+            healthStatus.status = "healthy";
+          } else if (
+            healthStatus.authentication.hasTokenFile ||
+            healthStatus.authentication.hasEnvToken ||
+            healthStatus.authentication.hasOAuthToken
+          ) {
+            healthStatus.status = "auth_issue";
+          } else {
+            healthStatus.status = "needs_setup";
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(healthStatus, null, 2),
+            },
+          ],
+        };
       }
     }
 
@@ -2219,179 +2361,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "evernote_connection": {
-        const { action, verbose = false } = validatedArgs;
-
-        // action === "user": full user profile + quota (needs the API).
-        if (action === "user") {
-          const [user, quota] = await Promise.all([
-            evernoteApi.getUser(),
-            evernoteApi.getQuotaInfo(),
-          ]);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    user: {
-                      id: user.id,
-                      username: user.username,
-                      email: user.email,
-                      name: user.name,
-                    },
-                    quota: quota,
-                  },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
-        }
-
-        // action === "status": health/diagnostic check.
-        // Basic server info
-        const healthStatus: any = {
-          server: {
-            name: "mcp-evernote",
-            version: "1.2.3",
-            status: "running",
-            environment: ENVIRONMENT,
-            timestamp: new Date().toISOString(),
-          },
-          configuration: {
-            consumerKeySet: !!CONSUMER_KEY,
-            consumerSecretSet: !!CONSUMER_SECRET,
-            environment: ENVIRONMENT,
-            isClaudeCode: oauth["isClaudeCode"],
-          },
-          authentication: {
-            status: "checking",
-            apiInitialized: !!api,
-            lastError: apiInitError,
-          },
-        };
-
-        // Try to check authentication status
-        try {
-          // Check if we have tokens without initializing API
-          const hasEnvToken = !!process.env.EVERNOTE_ACCESS_TOKEN;
-          const hasOAuthToken = !!process.env.OAUTH_TOKEN;
-
-          // Try to load token file
-          let hasTokenFile = false;
-          let tokenFileInfo: any = null;
-          try {
-            const fs = await import("fs/promises");
-            const path = await import("path");
-            const tokenPath = path.join(process.cwd(), ".evernote-token.json");
-            const tokenData = await fs.readFile(tokenPath, "utf-8");
-            const token = JSON.parse(tokenData);
-            hasTokenFile = true;
-            tokenFileInfo = {
-              exists: true,
-              hasToken: !!token.token,
-              hasNoteStoreUrl: !!token.noteStoreUrl,
-              userId: token.userId,
-              expires: token.expires
-                ? new Date(token.expires).toISOString()
-                : null,
-              isExpired: token.expires ? token.expires < Date.now() : false,
-            };
-          } catch (e) {
-            tokenFileInfo = { exists: false, error: (e as Error).message };
-          }
-
-          healthStatus.authentication = {
-            status: "checked",
-            apiInitialized: !!api,
-            hasEnvToken,
-            hasOAuthToken,
-            hasTokenFile,
-            tokenFileInfo: verbose ? tokenFileInfo : undefined,
-            lastError: apiInitError,
-          };
-
-          // If API is already initialized, test it
-          if (api) {
-            try {
-              const user = await api.getUser();
-              healthStatus.authentication.status = "authenticated";
-              healthStatus.authentication.user = {
-                id: user.id,
-                username: user.username,
-              };
-              healthStatus.status = "healthy";
-            } catch (e) {
-              healthStatus.authentication.status = "api_error";
-              healthStatus.authentication.apiError = (e as Error).message;
-              healthStatus.status = "unhealthy";
-            }
-          } else {
-            // Try to initialize API if we haven't yet
-            try {
-              await ensureAPI();
-              healthStatus.authentication.status = "authenticated";
-              healthStatus.authentication.apiInitialized = true;
-              healthStatus.status = "healthy";
-
-              // Get user info if successful
-              try {
-                const user = await api!.getUser();
-                healthStatus.authentication.user = {
-                  id: user.id,
-                  username: user.username,
-                };
-              } catch (e) {
-                // API initialized but can't get user
-                healthStatus.authentication.apiError = (e as Error).message;
-              }
-            } catch (e) {
-              healthStatus.authentication.status = "not_authenticated";
-              healthStatus.authentication.initError = (e as Error).message;
-              healthStatus.status = "needs_auth";
-            }
-          }
-        } catch (error: any) {
-          healthStatus.authentication.error = error.message;
-          healthStatus.status = "error";
-        }
-
-        // Add diagnostic information if verbose
-        if (verbose) {
-          healthStatus.diagnostics = {
-            cwd: process.cwd(),
-            nodeVersion: process.version,
-            platform: process.platform,
-            env: {
-              MCP_TRANSPORT: process.env.MCP_TRANSPORT || "not set",
-              CLAUDE_CODE_MCP: process.env.CLAUDE_CODE_MCP || "not set",
-              hasConsumerKey: !!process.env.EVERNOTE_CONSUMER_KEY,
-              hasConsumerSecret: !!process.env.EVERNOTE_CONSUMER_SECRET,
-            },
-          };
-        }
-
-        // Overall status determination
-        if (!healthStatus.status) {
-          if (healthStatus.authentication.status === "authenticated") {
-            healthStatus.status = "healthy";
-          } else if (
-            healthStatus.authentication.hasTokenFile ||
-            healthStatus.authentication.hasEnvToken ||
-            healthStatus.authentication.hasOAuthToken
-          ) {
-            healthStatus.status = "auth_issue";
-          } else {
-            healthStatus.status = "needs_setup";
-          }
-        }
-
+        // Only action "user" reaches the switch — status/reconnect/revoke are
+        // handled before ensureAPI() above so status can diagnose an
+        // unauthenticated state.
+        const [user, quota] = await Promise.all([
+          evernoteApi.getUser(),
+          evernoteApi.getQuotaInfo(),
+        ]);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(healthStatus, null, 2),
+              text: JSON.stringify(
+                {
+                  user: {
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    name: user.name,
+                  },
+                  quota: quota,
+                },
+                null,
+                2,
+              ),
             },
           ],
         };

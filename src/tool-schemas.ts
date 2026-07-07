@@ -190,5 +190,9 @@ export function validateToolArgs(toolName: string, args: unknown): any {
     // No schema for this tool (e.g. list tools with no args) - pass through
     return args;
   }
-  return schema.parse(args);
+  // MCP clients may omit `arguments` entirely for a zero-arg call (e.g. the
+  // list-all form of list_notebooks/list_tags). Coerce that to {} so object
+  // schemas apply their optional-field defaults instead of rejecting undefined;
+  // schemas with required fields still error with a proper "required" message.
+  return schema.parse(args ?? {});
 }

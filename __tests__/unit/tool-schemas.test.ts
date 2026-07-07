@@ -310,6 +310,16 @@ describe('tool schemas (M1)', () => {
       expect(result).toBe(args);
     });
 
+    it('coerces omitted args to {} for zero-arg list calls', () => {
+      // MCP clients may omit `arguments` for the list-all form.
+      expect(() => validateToolArgs('evernote_list_notebooks', undefined)).not.toThrow();
+      expect(validateToolArgs('evernote_list_tags', undefined)).toEqual({});
+    });
+
+    it('still rejects omitted args when a field is required', () => {
+      expect(() => validateToolArgs('evernote_polling', undefined)).toThrow();
+    });
+
     it('throws ZodError for invalid args', () => {
       expect(() =>
         validateToolArgs('evernote_delete_note', {}),
