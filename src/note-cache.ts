@@ -22,6 +22,7 @@
  */
 
 import type { SyncChunkFilterShape } from "./polling.js";
+import { getEvernoteErrorMeta, isAuthErrorCode } from "./errors.js";
 
 export const DEFAULT_NOTE_CACHE_SIZE = 200;
 export const DEFAULT_NOTE_CACHE_SYNC_TTL_MS = 30_000;
@@ -160,6 +161,15 @@ export class NoteCache {
     this.map.delete(guid);
     this.map.set(guid, entry);
     this.hits++;
+    if (!needResources && entry.hasResources) {
+      // The caller didn't ask for resources but this entry was cached from a
+      // withResources read. Hand back a resource-free view so a
+      // get_note(includeAttachmentText:false) read keeps its documented
+      // contract of omitting resource metadata, regardless of an earlier
+      // attachment-text read having populated the cache. The stored entry keeps
+      // its resources for later withResources hits.
+      return stripResourcesView(entry.note);
+    }
     return entry.note;
   }
 
@@ -244,8 +254,19 @@ export class NoteCache {
       const state = await syncApi.getSyncState();
       updateCount = state.updateCount;
     } catch (error) {
-      // The probe failed — often the very rate limit this cache exists to dodge.
-      // Keep serving what we have; the next probe after the TTL retries.
+      const { errorCode } = getEvernoteErrorMeta(error);
+      if (isAuthErrorCode(errorCode)) {
+        // An invalid/expired token is not something to paper over by serving
+        // stale bodies — rethrow so getNoteCached surfaces it to the tool's
+        // auth-recovery path and the user is told to reconnect. Reset the TTL
+        // gate so every subsequent read keeps re-probing (and re-reporting)
+        // until auth is restored, rather than silently serving stale for a
+        // whole TTL window.
+        this.lastSyncCheckAt = 0;
+        throw error;
+      }
+      // Otherwise transient (rate limit / network) — keep serving what we have;
+      // the next probe after the TTL retries.
       this.logger(
         `note-cache: getSyncState failed, serving existing cache (${errText(error)})`,
       );
@@ -331,6 +352,16 @@ export class NoteCache {
     this.evict(guid);
     return true;
   }
+}
+
+/** Shallow view of a note with its `resources` field omitted. */
+function stripResourcesView(note: any): any {
+  if (!note || note.resources == null) {
+    return note;
+  }
+  const view = { ...note };
+  delete view.resources;
+  return view;
 }
 
 /** Shallow-clone a note with resource binaries and recognition removed. */

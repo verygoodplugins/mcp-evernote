@@ -37,6 +37,24 @@ describe("NoteCache get/set", () => {
     expect(cache.get("a", false)).toBeTruthy();
   });
 
+  it("hands back a resource-free view when a resourced entry is read without resources", () => {
+    const cache = new NoteCache({ maxEntries: 10 });
+    const withRes: any = {
+      ...note("a", 1),
+      resources: [{ guid: "r1", mime: "image/png", data: { size: 5 } }],
+    };
+    cache.set("a", withRes, true);
+
+    // Read WITH resources → full note.
+    expect(cache.get("a", true).resources).toHaveLength(1);
+    // Read WITHOUT resources → resources omitted (honors includeAttachmentText:false).
+    const view = cache.get("a", false);
+    expect(view.resources).toBeUndefined();
+    expect(view.content).toBe(withRes.content);
+    // The stored entry keeps its resources for later resource reads.
+    expect(cache.get("a", true).resources).toHaveLength(1);
+  });
+
   it("strips resource binaries and recognition before caching", () => {
     const cache = new NoteCache({ maxEntries: 10 });
     const withRes: any = {
@@ -272,6 +290,40 @@ describe("NoteCache.ensureFresh", () => {
 
     expect(cache.get("a", false)).toBeTruthy();
     expect(getFilteredSyncChunk).not.toHaveBeenCalled();
+  });
+
+  it("rethrows auth failures from the sync probe instead of serving stale", async () => {
+    let now = 1000;
+    let mode: "ok" | "auth" = "ok";
+    const getSyncState = jest.fn(async () => {
+      if (mode === "auth") {
+        const e: any = new Error("authentication expired");
+        e.errorCode = 9;
+        throw e;
+      }
+      return { updateCount: 50 };
+    });
+    const api = { getSyncState, getFilteredSyncChunk: jest.fn() } as any;
+    const cache = new NoteCache({
+      maxEntries: 10,
+      syncTtlMs: 30000,
+      now: () => now,
+    });
+
+    await cache.ensureFresh(api); // seed 50
+    cache.set("a", note("a", 40), false);
+
+    now += 30000;
+    mode = "auth";
+    await expect(cache.ensureFresh(api)).rejects.toThrow(
+      "authentication expired",
+    );
+    // TTL gate was reset, so the very next read re-probes and re-surfaces the
+    // auth error rather than silently serving stale for a whole TTL window.
+    await expect(cache.ensureFresh(api)).rejects.toThrow(
+      "authentication expired",
+    );
+    expect(getSyncState).toHaveBeenCalledTimes(3);
   });
 
   it("clears the cache when the chunk walk fails", async () => {
