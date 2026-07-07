@@ -190,6 +190,7 @@ EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for 
 # Rate-limit transport (optional)
 EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous NoteStore RPCs (default: 3)
 EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS=15   # Auto-retry a rate-limited call once if the wait is <= this many seconds; 0 = off
+EVERNOTE_MAX_RESPONSE_CHARS=60000           # Total note-body chars per multi-note response; bodies past this are dropped with truncated:true
 ```
 
 On the hourly rate limit, tool errors return JSON with `error: "rate_limited"`
@@ -395,12 +396,18 @@ Create a note titled "Meeting Notes" with content "Discussed Q4 planning" in not
 ```
 
 #### `evernote_search_notes`
-Search for notes using Evernote's search syntax.
+Search for notes using Evernote's search syntax. Returns note metadata plus `totalNotes`; page with `offset`/`nextOffset`.
 
 **Parameters:**
-- `query` (required): Search query
+- `query` (required): Search query (use `"*"` to match all notes)
 - `notebookName` (optional): Limit to specific notebook
-- `maxResults` (optional): Maximum results (default: 20, max: 100)
+- `maxResults` (optional): Results per page (default: 20, max: 100; capped at 25 when `includeContent` is true)
+- `offset` (optional): Result offset for paging (default: 0)
+- `includeContent` (optional): Include each note's full body in `content`, one API call per note (default: false)
+- `format` (optional): Body projection when `includeContent` is true — `markdown` (default), `text`, or `enml`
+- `includePreview` (optional): Include a ~300-char plain-text preview per note (ignored when `includeContent` is true)
+
+**Export a whole notebook** as text without a dedicated tool: `query: "*"`, set `notebookName` + `includeContent`, and page with `offset` until `hasMore` is false.
 
 **Example:**
 ```
@@ -408,11 +415,14 @@ Search for notes containing "project roadmap" in the "Work" notebook
 ```
 
 #### `evernote_get_note`
-Retrieve a specific note by GUID.
+Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 
-**Parameters:**
-- `guid` (required): Note GUID
-- `includeContent` (optional): Include note content (default: true)
+**Parameters:** provide exactly one of `guid` or `guids`.
+- `guid`: single note GUID — full detail, including PDF/image-OCR attachment text
+- `guids`: array of up to 25 GUIDs — metadata + `content` only (no attachment text; use a single `guid` for that). Returns `{ notes, failed?, aborted? }`; on a mid-batch rate limit it stops with partial results plus the guids left to resume.
+- `format` (optional): body projection — `markdown` (default), `text`, or `enml`
+- `includeContent` (optional): include note content (default: true)
+- `includeAttachmentText` (optional, single-note only): extract PDF/OCR attachment text (default: true)
 
 > Returned Markdown represents embedded resources with `evernote-resource:<hash>` URLs. Leave those references intact so attachments stay linked when you edit the note.
 

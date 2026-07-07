@@ -9,7 +9,7 @@ import {
 import { config } from "dotenv";
 import { ZodError } from "zod";
 import { EvernoteOAuth } from "./oauth.js";
-import { EvernoteAPI } from "./evernote-api.js";
+import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
 import { computeWebhookSignature } from "./webhook.js";
@@ -19,6 +19,10 @@ import {
   DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
   RpcLimitOptions,
 } from "./concurrency.js";
+import {
+  applyCharBudget,
+  DEFAULT_MAX_RESPONSE_CHARS,
+} from "./response-budget.js";
 import {
   enrichToolsWithNotebookDescriptions,
   resolveNotebookCacheForToolDescriptions,
@@ -91,6 +95,21 @@ const RPC_LIMIT_OPTIONS: Partial<RpcLimitOptions> = {
     10,
   ),
 };
+
+// Total content-character budget for multi-note responses, to stay under the
+// MCP response token cap. Bodies past this are dropped with `truncated: true`.
+// A non-numeric / non-positive env value falls back to the default (a NaN
+// budget would slice every body to an empty string).
+const MAX_RESPONSE_CHARS = (() => {
+  const parsed = parseInt(
+    process.env.EVERNOTE_MAX_RESPONSE_CHARS ||
+      String(DEFAULT_MAX_RESPONSE_CHARS),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_RESPONSE_CHARS;
+})();
 
 // Polling state
 let lastUpdateCount: number | null = null;
@@ -589,13 +608,17 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_search_notes",
-    description: "Search for notes in Evernote with optional content preview",
+    description:
+      "Search notes. Returns note metadata plus `totalNotes`; page through results with `offset`/`nextOffset`. " +
+      "Set `includeContent: true` to include full bodies (each body costs one API call, so page size is capped at 25). " +
+      'To export a whole notebook as text: query "*", set notebookName + includeContent, and page with offset until hasMore is false.',
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Search query (Evernote search syntax supported)",
+          description:
+            'Search query (Evernote search syntax supported). Use "*" to match all notes.',
         },
         notebookName: {
           type: "string",
@@ -603,13 +626,32 @@ const tools: Tool[] = [
         },
         maxResults: {
           type: "number",
-          description: "Maximum number of results (default: 20, max: 100)",
+          description:
+            "Maximum results per page (default: 20, max: 100; capped at 25 when includeContent is true)",
           default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Result offset for paging (default: 0)",
+          default: 0,
+        },
+        includeContent: {
+          type: "boolean",
+          description:
+            "Include each note's full body in `content` (one API call per note). Supersedes includePreview.",
+          default: false,
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "text", "enml"],
+          description:
+            "Body projection when includeContent is true: markdown (default), plain text, or raw ENML",
+          default: "markdown",
         },
         includePreview: {
           type: "boolean",
           description:
-            "Include first ~300 chars of note content as plain text preview (requires extra API calls)",
+            "Include first ~300 chars of note content as a plain-text preview (one API call per note; ignored when includeContent is true)",
           default: false,
         },
       },
@@ -619,13 +661,30 @@ const tools: Tool[] = [
   {
     name: "evernote_get_note",
     description:
-      "Get a specific note by its GUID. Attachment text from PDFs and image OCR is extracted and included by default; set includeAttachmentText: false to skip it.",
+      "Get one or more notes. Provide exactly one of `guid` (single note, full detail including attachment/OCR text) " +
+      "or `guids` (batch of up to 25, body-focused: metadata + content only, no attachment text — use single `guid` for that). " +
+      "Batch mode returns { notes, failed?, aborted? } and, if the hourly rate limit hits mid-batch, stops with partial " +
+      "results plus the guids left to resume.",
     inputSchema: {
       type: "object",
       properties: {
         guid: {
           type: "string",
-          description: "Note GUID",
+          description: "Single note GUID (mutually exclusive with guids)",
+        },
+        guids: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 25,
+          description:
+            "Batch of note GUIDs, max 25 (mutually exclusive with guid). Body-focused; no attachment text.",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "text", "enml"],
+          description:
+            "Body projection: markdown (default), plain text, or raw ENML",
+          default: "markdown",
         },
         includeContent: {
           type: "boolean",
@@ -635,19 +694,19 @@ const tools: Tool[] = [
         includePdfContent: {
           type: "boolean",
           description:
-            "Deprecated alias for includeAttachmentText. When false and includeAttachmentText is unset, " +
-            "attachment resources are not fetched, so resource metadata is omitted from the response too.",
+            "Deprecated alias for includeAttachmentText (single-note mode only).",
           default: true,
         },
         includeAttachmentText: {
           type: "boolean",
           description:
-            "Extract and include text from readable attachments: PDF text layers and Evernote OCR for images (default: true). " +
-            "When false, attachment resources are not fetched, so resource metadata is omitted from the response too.",
+            "Single-note mode: extract text from readable attachments — PDF text layers and Evernote OCR for images " +
+            "(default: true). When false, attachment resources are not fetched, so resource metadata is omitted too. " +
+            "Ignored in batch (guids) mode, which never fetches attachment text.",
           default: true,
         },
       },
-      required: ["guid"],
+      required: [],
     },
   },
   {
@@ -1261,33 +1320,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           query,
           notebookName,
           maxResults = 20,
+          offset = 0,
           includePreview = false,
+          includeContent = false,
+          format = "markdown",
         } = validatedArgs;
 
-        // Find notebook GUID if name provided
+        // Full-body fetches are far heavier than metadata; cap them tighter.
+        const effectiveMax = includeContent
+          ? Math.min(maxResults, 25)
+          : maxResults;
+
+        // Resolve notebook name → GUID via the cache (no per-search API call).
         let notebookGuid: string | undefined;
         if (notebookName) {
-          const notebooks = await evernoteApi.listNotebooks();
+          const notebooks = await getCachedNotebooks(evernoteApi);
           const notebook = notebooks.find((nb) => nb.name === notebookName);
           if (notebook) {
             notebookGuid = notebook.guid;
           }
         }
 
+        // Evernote's match-all is expressed by OMITTING words; a bare "*" is
+        // not a valid text term. Translate it so the documented export path
+        // (query "*" + notebookName) works.
+        const words = query.trim() === "*" ? undefined : query;
+
         const results = await evernoteApi.searchNotes({
-          words: query,
+          words,
           notebookGuid,
-          maxNotes: Math.min(maxResults, 100),
+          offset,
+          maxNotes: Math.min(effectiveMax, 100),
         });
 
-        // Build tag lookup map (tagGuid -> tagName) - single API call
+        // Build tag lookup map (tagGuid -> tagName) from the cache.
         let tagMap: Map<string, string> | undefined;
         const hasAnyTags = results.notes.some(
           (note: any) => note.tagGuids && note.tagGuids.length > 0,
         );
         if (hasAnyTags) {
-          const tags = await evernoteApi.listTags();
-          tagMap = new Map(tags.map((t) => [t.guid!, t.name!]));
+          const tags = await getCachedTags(evernoteApi);
+          tagMap = new Map(tags.map((t: any) => [t.guid!, t.name!]));
+        }
+
+        // When full content is requested, fetch bodies once via the batch
+        // helper and derive everything from that — no per-note double-fetch.
+        let contentByGuid: Map<string, string | undefined> | undefined;
+        let batchAborted: BatchFetchResult["aborted"];
+        let batchFailed: BatchFetchResult["failed"] = [];
+        if (includeContent && results.notes.length > 0) {
+          const guids = results.notes.map((n: any) => n.guid);
+          const batch = await evernoteApi.getNotesBatch(guids, {
+            includeContent: true,
+            format,
+          });
+          contentByGuid = new Map(batch.notes.map((n) => [n.guid, n.content]));
+          batchAborted = batch.aborted;
+          batchFailed = batch.failed;
         }
 
         // Build enhanced note results
@@ -1319,13 +1408,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               }
             }
 
-            // Fetch content preview if requested
-            if (includePreview) {
+            if (contentByGuid) {
+              // Full content requested — attach it; supersedes the preview.
+              const content = contentByGuid.get(note.guid);
+              if (content != null) {
+                enhanced.content = content;
+              }
+            } else if (includePreview) {
+              // Preview-only: one getNote per note (the minimum to preview a
+              // body). Cheaper than fetching content twice.
               try {
-                const preview = await evernoteApi.getNotePreview(
-                  note.guid,
-                  300,
-                );
+                const preview = await evernoteApi.getNotePreview(note.guid, 300);
                 if (preview) {
                   enhanced.preview = preview;
                 }
@@ -1341,26 +1434,146 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }),
         );
 
+        const { notes: budgetedNotes, truncatedCount } = applyCharBudget(
+          notes,
+          MAX_RESPONSE_CHARS,
+        );
+
+        const returned = budgetedNotes.length;
+        // When a content batch aborts mid-page, only advance past the notes
+        // whose bodies were actually fetched — otherwise paging would skip the
+        // un-fetched notes and the documented export loop would lose them. The
+        // fetched count is exactly the size of contentByGuid.
+        const progressed =
+          batchAborted && contentByGuid ? contentByGuid.size : returned;
+        const hasMore = batchAborted
+          ? true
+          : offset + returned < results.totalNotes;
+        const payload: any = {
+          totalNotes: results.totalNotes,
+          offset,
+          returned,
+          hasMore,
+          notes: budgetedNotes,
+        };
+        if (hasMore) {
+          payload.nextOffset = offset + progressed;
+        }
+        if (includeContent && effectiveMax !== maxResults) {
+          payload.maxResultsApplied = effectiveMax;
+        }
+        if (truncatedCount > 0) {
+          payload.truncatedCount = truncatedCount;
+        }
+        if (batchFailed.length > 0) {
+          payload.failed = batchFailed;
+        }
+        if (batchAborted) {
+          payload.aborted = batchAborted;
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(
-                {
-                  totalNotes: results.totalNotes,
-                  notes: notes,
-                },
-                null,
-                2,
-              ),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
       }
 
       case "evernote_get_note": {
-        const { guid, includeContent = true, includeAttachmentText = true } =
-          validatedArgs;
+        const {
+          guid,
+          guids,
+          format = "markdown",
+          includeContent = true,
+          includeAttachmentText = true,
+        } = validatedArgs;
+
+        // Batch mode: body-focused fan-out with partial-results/resume on rate
+        // limit. Attachment/OCR text is single-note only (use `guid`).
+        if (guids && guids.length > 0) {
+          const batch = await evernoteApi.getNotesBatch(guids, {
+            includeContent,
+            format,
+          });
+
+          // Best-effort name enrichment from the caches (no extra API calls).
+          // getNote returns tags as GUIDs, so resolve them like search does.
+          let notebookNames: Map<string, string> | undefined;
+          let tagNames: Map<string, string> | undefined;
+          const anyTags = batch.notes.some(
+            (n) => n.tagGuids && n.tagGuids.length > 0,
+          );
+          try {
+            const notebooks = await getCachedNotebooks(evernoteApi);
+            notebookNames = new Map(notebooks.map((n) => [n.guid!, n.name!]));
+            if (anyTags) {
+              const tags = await getCachedTags(evernoteApi);
+              tagNames = new Map(tags.map((t: any) => [t.guid!, t.name!]));
+            }
+          } catch {
+            // enrichment is best-effort; never fail the batch over it.
+          }
+
+          const enriched = batch.notes.map((n) => {
+            const out: any = {
+              guid: n.guid,
+              title: n.title,
+              created: n.created,
+              updated: n.updated,
+            };
+            if (n.notebookGuid) {
+              out.notebookGuid = n.notebookGuid;
+              const name = notebookNames?.get(n.notebookGuid);
+              if (name) {
+                out.notebookName = name;
+              }
+            }
+            if (n.tagGuids && n.tagGuids.length > 0) {
+              const names = n.tagGuids
+                .map((g) => tagNames?.get(g))
+                .filter(Boolean);
+              if (names.length > 0) {
+                out.tags = names;
+              }
+            }
+            if (n.contentLength != null) {
+              out.contentLength = n.contentLength;
+            }
+            if (n.content != null) {
+              out.content = n.content;
+            }
+            return out;
+          });
+
+          const { notes, truncatedCount } = applyCharBudget(
+            enriched,
+            MAX_RESPONSE_CHARS,
+          );
+
+          const payload: any = { notes };
+          if (batch.failed.length > 0) {
+            payload.failed = batch.failed;
+          }
+          if (batch.aborted) {
+            payload.aborted = batch.aborted;
+          }
+          if (truncatedCount > 0) {
+            payload.truncatedCount = truncatedCount;
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+
         // Fetch resources whenever attachment text/resource metadata is wanted, independent of includeContent.
         const note = await evernoteApi.getNote(
           guid,
@@ -1391,9 +1604,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (includeContent && note.content) {
-          result.content = evernoteApi.convertENMLToMarkdown(
+          result.content = evernoteApi.renderNoteContent(
             note.content,
             note.resources,
+            format,
           );
         }
 

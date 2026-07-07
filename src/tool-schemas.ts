@@ -7,21 +7,37 @@ export const CreateNoteSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
+const NoteFormatSchema = z.enum(['markdown', 'text', 'enml']);
+
 export const SearchNotesSchema = z.object({
   query: z.string().min(1, 'Query is required'),
   notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
   maxResults: z.number().min(1).max(100).optional().default(20),
+  offset: z.number().int().min(0).optional().default(0),
   includePreview: z.boolean().optional().default(false),
+  includeContent: z.boolean().optional().default(false),
+  format: NoteFormatSchema.optional().default('markdown'),
 });
 
+// get_note accepts either a single `guid` or a batch `guids` (max 25), never
+// both. Attachment-text extraction defaults on for a single note but off in
+// batch mode (a wide fan-out of binary downloads is the wrong default).
 export const GetNoteSchema = z.object({
-  guid: z.string().min(1, 'GUID is required'),
+  guid: z.string().min(1).optional(),
+  guids: z.array(z.string().min(1)).min(1).max(25).optional(),
+  format: NoteFormatSchema.optional().default('markdown'),
   includeContent: z.boolean().optional().default(true),
   includePdfContent: z.boolean().optional(),
   includeAttachmentText: z.boolean().optional(),
+}).refine(data => !!data.guid !== !!data.guids, {
+  message: 'Provide exactly one of guid or guids (max 25)',
+  path: ['guid'],
 }).transform(data => ({
   ...data,
-  includeAttachmentText: data.includeAttachmentText ?? data.includePdfContent ?? true,
+  includeAttachmentText:
+    data.includeAttachmentText ??
+    data.includePdfContent ??
+    (data.guids ? false : true),
 }));
 
 export const GetResourceTextSchema = z.object({

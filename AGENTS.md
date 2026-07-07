@@ -127,6 +127,15 @@ Many tools accept user-friendly names but resolve to Evernote GUIDs
 internally (notebook names → GUIDs via `listNotebooks()`, tag names → GUIDs
 via `listTags()`, including hierarchical parent-tag resolution).
 
+The read path is parameterized, not multiplied into extra tools: `get_note`
+takes either `guid` (single, full detail incl. attachment text) or `guids` (a
+≤25 batch, body-focused, with partial-results/resume on rate limit); both
+`get_note` and `search_notes` take a `format` of `markdown` | `text` | `enml`;
+`search_notes` takes `offset` + `includeContent` for paged full-text export
+(`query:"*"` + `notebookName` + `includeContent`, page until `hasMore` is
+false) — so there is no separate `get_notes_batch` or `export_notebook` tool.
+Multi-note responses are bounded by `EVERNOTE_MAX_RESPONSE_CHARS`.
+
 ## Authentication
 
 Token resolution is handled by `EvernoteOAuth.getAccessToken()` in
@@ -183,6 +192,7 @@ fallbacks in code.
 | `EVERNOTE_ALLOWED_FILE_ROOTS` | `[os.homedir(), process.cwd()]` | `src/path-security.ts:9` | `path.delimiter`-separated allow-list of roots for local attachments (default at `src/path-security.ts:6`) |
 | `EVERNOTE_MAX_CONCURRENCY` | `3` | `src/index.ts` | Max simultaneous NoteStore RPCs (shared FIFO semaphore in `src/concurrency.ts`); bounds burst width so a wide fan-out doesn't spike past the hourly rate limit |
 | `EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS` | `15` | `src/index.ts` | Auto-retry a rate-limited RPC (errorCode 19) **once** when Evernote's `rateLimitDuration` is ≤ this many seconds; `0` disables auto-retry. Longer waits return a structured error instead |
+| `EVERNOTE_MAX_RESPONSE_CHARS` | `60000` | `src/index.ts` | Total note-body character budget per multi-note response (`get_note` batch, `search_notes` with `includeContent`); bodies past the budget are dropped with `truncated: true` + original `contentLength` (see `src/response-budget.ts`). Keeps responses under the ~25k-token MCP cap |
 
 Notes:
 - **Rate-limit handling.** Failed tool calls return a machine-parseable JSON

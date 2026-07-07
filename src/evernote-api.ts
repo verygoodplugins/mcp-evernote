@@ -17,6 +17,7 @@ import {
   ResourceInfo,
   NoteReplacement,
   PatchNoteResult,
+  NoteFormat,
 } from "./types.js";
 import { readFile } from "fs/promises";
 import { basename, extname } from "path";
@@ -28,7 +29,11 @@ import {
   resolveRpcLimitOptions,
   RpcLimitOptions,
 } from "./concurrency.js";
-import { getEvernoteErrorMeta, RATE_LIMIT_ERROR_CODE } from "./errors.js";
+import {
+  getEvernoteErrorMeta,
+  isAuthErrorCode,
+  RATE_LIMIT_ERROR_CODE,
+} from "./errors.js";
 
 const UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS = [2000, 4000, 8000];
 
@@ -44,6 +49,50 @@ function isRetryableEditLock(error: any): boolean {
       !Number.isFinite(rateLimitDuration) ||
       rateLimitDuration <= 0)
   );
+}
+
+/** One note in a batch fetch result (body-focused; no attachment text). */
+export interface BatchNoteEntry {
+  guid: string;
+  title?: string;
+  created?: string;
+  updated?: string;
+  notebookGuid?: string;
+  // getNote returns applied tags as GUIDs (tagNames is unset on reads); the
+  // handler resolves these to names via the tag cache.
+  tagGuids?: string[];
+  contentLength?: number;
+  content?: string;
+}
+
+export interface BatchFetchResult {
+  notes: BatchNoteEntry[];
+  failed: Array<{ guid: string; message: string; errorCode?: number }>;
+  /**
+   * Present when the hourly rate limit aborted the batch mid-way. The caller
+   * can wait `retryAfterSeconds` and re-request `remainingGuids`.
+   */
+  aborted?: {
+    reason: "rate_limited";
+    retryAfterSeconds?: number;
+    remainingGuids: string[];
+  };
+}
+
+/**
+ * Truncate plain text to `maxLength` at a word boundary, appending an ellipsis
+ * when clipped. Shared by search previews and any preview projection.
+ */
+export function truncatePlainText(text: string, maxLength = 300): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  let truncated = text.substring(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(" ");
+  if (lastSpace > maxLength * 0.7) {
+    truncated = truncated.substring(0, lastSpace);
+  }
+  return truncated + "...";
 }
 
 export class EvernoteAPI {
@@ -148,19 +197,109 @@ export class EvernoteAPI {
       return null;
     }
 
-    // Truncate and add ellipsis if needed
-    if (plainText.length <= maxLength) {
-      return plainText;
+    return truncatePlainText(plainText, maxLength);
+  }
+
+  /**
+   * Render a note's ENML body into the requested output projection. `markdown`
+   * (default) runs the Turndown/GFM conversion; `text` strips to plain text;
+   * `enml` returns the raw ENML untouched.
+   */
+  renderNoteContent(
+    enml: string | undefined,
+    resources: any,
+    format: NoteFormat,
+  ): string | undefined {
+    if (!enml) {
+      return undefined;
+    }
+    switch (format) {
+      case "text":
+        return this.enmlToPlainText(enml);
+      case "enml":
+        return enml;
+      case "markdown":
+      default:
+        return this.convertENMLToMarkdown(enml, resources);
+    }
+  }
+
+  /**
+   * Fetch many notes in one call. Evernote has no batch endpoint, so this is a
+   * sequential server-side fan-out of getNote (the shared RPC limiter bounds
+   * concurrency across calls). Body-focused: returns note metadata + content in
+   * the requested format, NOT attachment/OCR text — use a single `guid` for
+   * that. On the hourly rate limit it stops and returns partial results plus an
+   * `aborted` marker so the caller can resume the remaining guids.
+   */
+  async getNotesBatch(
+    guids: string[],
+    opts: { includeContent: boolean; format: NoteFormat },
+  ): Promise<BatchFetchResult> {
+    const notes: BatchNoteEntry[] = [];
+    const failed: BatchFetchResult["failed"] = [];
+
+    for (let i = 0; i < guids.length; i++) {
+      const guid = guids[i];
+      try {
+        const note = await this.getNote(guid, opts.includeContent, false);
+        const entry: BatchNoteEntry = {
+          guid: note.guid,
+          title: note.title,
+          created: note.created
+            ? new Date(note.created).toISOString()
+            : undefined,
+          updated: note.updated
+            ? new Date(note.updated).toISOString()
+            : undefined,
+          notebookGuid: note.notebookGuid,
+          tagGuids: note.tagGuids,
+          contentLength:
+            note.contentLength ??
+            (typeof note.content === "string" ? note.content.length : undefined),
+        };
+        if (opts.includeContent && note.content) {
+          entry.content = this.renderNoteContent(
+            note.content,
+            note.resources,
+            opts.format,
+          );
+        }
+        notes.push(entry);
+      } catch (error: any) {
+        const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+        if (isAuthErrorCode(errorCode)) {
+          // Auth failure is fatal for the whole batch (every remaining guid
+          // would fail identically). Rethrow so the tool's auth-recovery path
+          // runs and the client is told to reconnect, rather than burying it
+          // in a per-note `failed` entry and returning success.
+          throw error;
+        }
+        if (errorCode === RATE_LIMIT_ERROR_CODE) {
+          // Once the hourly quota trips, every subsequent call fails the same
+          // way — stop and hand back what we have plus how to resume.
+          return {
+            notes,
+            failed,
+            aborted: {
+              reason: "rate_limited",
+              retryAfterSeconds:
+                typeof rateLimitDuration === "number"
+                  ? rateLimitDuration
+                  : undefined,
+              remainingGuids: guids.slice(i),
+            },
+          };
+        }
+        failed.push({
+          guid,
+          message: error?.message ?? String(error),
+          errorCode,
+        });
+      }
     }
 
-    // Find a good break point (word boundary)
-    let truncated = plainText.substring(0, maxLength);
-    const lastSpace = truncated.lastIndexOf(" ");
-    if (lastSpace > maxLength * 0.7) {
-      truncated = truncated.substring(0, lastSpace);
-    }
-
-    return truncated + "...";
+    return { notes, failed };
   }
 
   /**
@@ -169,7 +308,7 @@ export class EvernoteAPI {
    * This implementation uses an HTML parser instead of regular expressions
    * to avoid incomplete multi-character sanitization issues.
    */
-  private enmlToPlainText(enmlContent: string): string {
+  enmlToPlainText(enmlContent: string): string {
     // Parse the ENML/HTML content
     const $ = cheerio.load(enmlContent);
 
