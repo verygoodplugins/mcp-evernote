@@ -186,7 +186,16 @@ OAUTH_CALLBACK_PORT=3000        # Default: 3000
 EVERNOTE_POLLING_ENABLED=true                                  # Auto-start polling
 EVERNOTE_POLL_INTERVAL=3600000                                 # 1 hour (min: 900000 = 15 min)
 EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for change notifications
+
+# Rate-limit transport (optional)
+EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous NoteStore RPCs (default: 3)
+EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS=15   # Auto-retry a rate-limited call once if the wait is <= this many seconds; 0 = off
 ```
+
+On the hourly rate limit, tool errors return JSON with `error: "rate_limited"`
+and `retryAfterSeconds` (Evernote's exact backoff window). Bounding concurrency
+smooths bursts but cannot restore quota — the quota is a per-token hourly call
+count, so the durable fixes are fewer calls and honoring the backoff.
 
 ### 3. Configure Your Client
 

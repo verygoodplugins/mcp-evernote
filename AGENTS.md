@@ -112,15 +112,16 @@ directly in `evernote-api.ts`.
 
 ## MCP Tools
 
-The server defines **26 tools**, all prefixed `evernote_` (defined in the
+The server defines **27 tools**, all prefixed `evernote_` (defined in the
 tools array starting at `src/index.ts:316`). They cover notes
 (`create_note`, `get_note`, `update_note`, `patch_note`, `delete_note`,
 `search_notes`), notebooks (`list_notebooks`, `get_notebook`,
 `create_notebook`, `update_notebook`), tags (`list_tags`, `get_tag`,
 `create_tag`, `update_tag`), resources/attachments (`get_resource`,
-`list_note_resources`, `add_resource_to_note`, `get_resource_recognition`),
-auth/health (`get_user_info`, `revoke_auth`, `health_check`, `reconnect`),
-and polling (`start_polling`, `stop_polling`, `poll_now`, `polling_status`).
+`list_note_resources`, `add_resource_to_note`, `get_resource_recognition`,
+`get_resource_text`), auth/health (`get_user_info`, `revoke_auth`,
+`health_check`, `reconnect`), and polling (`start_polling`, `stop_polling`,
+`poll_now`, `polling_status`).
 
 Many tools accept user-friendly names but resolve to Evernote GUIDs
 internally (notebook names → GUIDs via `listNotebooks()`, tag names → GUIDs
@@ -180,8 +181,18 @@ fallbacks in code.
 | `EVERNOTE_WEBHOOK_URL` | — | `src/index.ts:54` | URL notified on detected changes |
 | `EVERNOTE_WEBHOOK_SECRET` | — | `src/index.ts:55` | HMAC-SHA256 signing secret for webhook payloads |
 | `EVERNOTE_ALLOWED_FILE_ROOTS` | `[os.homedir(), process.cwd()]` | `src/path-security.ts:9` | `path.delimiter`-separated allow-list of roots for local attachments (default at `src/path-security.ts:6`) |
+| `EVERNOTE_MAX_CONCURRENCY` | `3` | `src/index.ts` | Max simultaneous NoteStore RPCs (shared FIFO semaphore in `src/concurrency.ts`); bounds burst width so a wide fan-out doesn't spike past the hourly rate limit |
+| `EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS` | `15` | `src/index.ts` | Auto-retry a rate-limited RPC (errorCode 19) **once** when Evernote's `rateLimitDuration` is ≤ this many seconds; `0` disables auto-retry. Longer waits return a structured error instead |
 
 Notes:
+- **Rate-limit handling.** Failed tool calls return a machine-parseable JSON
+  body (`src/errors.ts`): `{ error, tool, message, errorCode?, errorName?,
+  retryAfterSeconds?, timestamp }`. On the hourly rate limit `error` is
+  `"rate_limited"` and `retryAfterSeconds` is Evernote's exact backoff window —
+  read it and reschedule rather than retrying blindly. Concurrency limiting
+  shapes bursts; it does **not** restore quota (the quota is a per-token hourly
+  call count). The only real quota levers are fewer calls (caching) and honoring
+  the backoff.
 - `EVERNOTE_POLL_INTERVAL` is clamped: the effective interval is
   `max(15min, EVERNOTE_POLL_INTERVAL)` — the 15-minute floor is an Evernote
   requirement (`src/index.ts:48`).
