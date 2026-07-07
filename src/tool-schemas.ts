@@ -129,12 +129,13 @@ export const PatchNoteSchema = z.object({
   })).min(1, 'At least one replacement is required'),
 });
 
-export const HealthCheckSchema = z.object({
-  verbose: z.boolean().optional().default(false),
-});
-
 export const PollingSchema = z.object({
   action: z.enum(['start', 'stop', 'poll', 'status']),
+});
+
+export const ConnectionSchema = z.object({
+  action: z.enum(['status', 'user', 'reconnect', 'revoke']),
+  verbose: z.boolean().optional().default(false),
 });
 
 // Map tool names to their schemas
@@ -153,8 +154,8 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_get_tag: GetTagSchema,
   evernote_update_tag: UpdateTagSchema,
   evernote_patch_note: PatchNoteSchema,
-  evernote_health_check: HealthCheckSchema,
   evernote_polling: PollingSchema,
+  evernote_connection: ConnectionSchema,
 };
 
 /**

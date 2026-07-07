@@ -12,7 +12,8 @@ import {
   GetTagSchema,
   AddResourceToNoteSchema,
   GetResourceSchema,
-  HealthCheckSchema,
+  ConnectionSchema,
+  PollingSchema,
   validateToolArgs,
 } from '../../src/tool-schemas';
 
@@ -244,10 +245,32 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('HealthCheckSchema', () => {
+  describe('ConnectionSchema', () => {
     it('defaults verbose to false', () => {
-      const result = HealthCheckSchema.parse({});
+      const result = ConnectionSchema.parse({ action: 'status' });
       expect(result.verbose).toBe(false);
+    });
+
+    it('accepts each action', () => {
+      for (const action of ['status', 'user', 'reconnect', 'revoke'] as const) {
+        expect(ConnectionSchema.parse({ action }).action).toBe(action);
+      }
+    });
+
+    it('rejects an unknown action', () => {
+      expect(() => ConnectionSchema.parse({ action: 'login' })).toThrow();
+    });
+  });
+
+  describe('PollingSchema', () => {
+    it('accepts each action', () => {
+      for (const action of ['start', 'stop', 'poll', 'status'] as const) {
+        expect(PollingSchema.parse({ action }).action).toBe(action);
+      }
+    });
+
+    it('rejects a missing action', () => {
+      expect(() => PollingSchema.parse({})).toThrow();
     });
   });
 

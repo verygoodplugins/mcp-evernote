@@ -862,42 +862,25 @@ const tools: Tool[] = [
     },
   },
   {
-    name: "evernote_get_user_info",
-    description: "Get current user information and quota",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_revoke_auth",
-    description: "Revoke stored authentication token",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "evernote_health_check",
-    description: "Check the health and status of the Evernote MCP server",
+    name: "evernote_connection",
+    description:
+      'Manage the Evernote connection and account. action: "status" runs a health/diagnostic check (auth state, config), "user" returns the account profile + quota, "reconnect" forces reinitialization (useful when "Not connected" errors persist), "revoke" clears the stored auth token.',
     inputSchema: {
       type: "object",
       properties: {
+        action: {
+          type: "string",
+          enum: ["status", "user", "reconnect", "revoke"],
+          description: "Connection/account operation to perform.",
+        },
         verbose: {
           type: "boolean",
-          description: "Include detailed diagnostic information",
+          description:
+            'With action:"status", include detailed diagnostics (default: false).',
           default: false,
         },
       },
-    },
-  },
-  {
-    name: "evernote_reconnect",
-    description:
-      'Force reconnection to Evernote (useful when "Not connected" errors persist)',
-    inputSchema: {
-      type: "object",
-      properties: {},
+      required: ["action"],
     },
   },
   {
@@ -1150,6 +1133,39 @@ const legacyTools: Tool[] = [
       '[DEPRECATED — use evernote_polling with action:"status"] Get the current polling configuration and status.',
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "evernote_get_user_info",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"user"] Get current user information and quota.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_revoke_auth",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"revoke"] Revoke stored authentication token.',
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evernote_health_check",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"status"] Check the health and status of the Evernote MCP server.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        verbose: {
+          type: "boolean",
+          description: "Include detailed diagnostic information",
+          default: false,
+        },
+      },
+    },
+  },
+  {
+    name: "evernote_reconnect",
+    description:
+      '[DEPRECATED — use evernote_connection with action:"reconnect"] Force reconnection to Evernote.',
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -1210,45 +1226,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    // Handle auth revocation specially
-    if (name === "evernote_revoke_auth") {
-      await oauth.revokeToken();
-      api = null;
-      apiInitError = null;
-      lastInitAttempt = 0;
-      clearEntityCaches();
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Authentication token revoked. You will need to re-authenticate on next use.",
-          },
-        ],
-      };
-    }
+    // Connection/account operations. revoke + reconnect need no live API and
+    // return here; status + user fall through to ensureAPI and the switch case
+    // below (preserving the old health_check/get_user_info gating exactly).
+    if (name === "evernote_connection") {
+      const { action } = validatedArgs;
 
-    // Handle reconnect specially
-    if (name === "evernote_reconnect") {
-      console.error("Force reconnect requested");
-      try {
-        await ensureAPI(true); // Force reinitialization
+      if (action === "revoke") {
+        await oauth.revokeToken();
+        api = null;
+        apiInitError = null;
+        lastInitAttempt = 0;
+        clearEntityCaches();
         return {
           content: [
             {
               type: "text",
-              text: "✅ Successfully reconnected to Evernote",
+              text: "Authentication token revoked. You will need to re-authenticate on next use.",
             },
           ],
         };
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
-            },
-          ],
-        };
+      }
+
+      if (action === "reconnect") {
+        console.error("Force reconnect requested");
+        try {
+          await ensureAPI(true); // Force reinitialization
+          return {
+            content: [
+              {
+                type: "text",
+                text: "✅ Successfully reconnected to Evernote",
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
+              },
+            ],
+          };
+        }
       }
     }
 
@@ -1957,34 +1978,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "evernote_get_user_info": {
-        const [user, quota] = await Promise.all([
-          evernoteApi.getUser(),
-          evernoteApi.getQuotaInfo(),
-        ]);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  user: {
-                    id: user.id,
-                    username: user.username,
-                    email: user.email,
-                    name: user.name,
-                  },
-                  quota: quota,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      }
-
       // Resource tools
       case "evernote_get_resource": {
         const { guid, as } = validatedArgs;
@@ -2241,9 +2234,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      case "evernote_health_check": {
-        const { verbose = false } = validatedArgs;
+      case "evernote_connection": {
+        const { action, verbose = false } = validatedArgs;
 
+        // action === "user": full user profile + quota (needs the API).
+        if (action === "user") {
+          const [user, quota] = await Promise.all([
+            evernoteApi.getUser(),
+            evernoteApi.getQuotaInfo(),
+          ]);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    user: {
+                      id: user.id,
+                      username: user.username,
+                      email: user.email,
+                      name: user.name,
+                    },
+                    quota: quota,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
+        // action === "status": health/diagnostic check.
         // Basic server info
         const healthStatus: any = {
           server: {

@@ -69,6 +69,25 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
     canonical: 'evernote_polling',
     mapArgs: () => ({ action: 'status' }),
   },
+
+  // Connection/account 4 -> 1 (PR 3): evernote_connection({ action }).
+  evernote_health_check: {
+    canonical: 'evernote_connection',
+    mapArgs: (a) => ({ action: 'status', verbose: a.verbose }),
+    sampleArgs: { verbose: true },
+  },
+  evernote_reconnect: {
+    canonical: 'evernote_connection',
+    mapArgs: () => ({ action: 'reconnect' }),
+  },
+  evernote_revoke_auth: {
+    canonical: 'evernote_connection',
+    mapArgs: () => ({ action: 'revoke' }),
+  },
+  evernote_get_user_info: {
+    canonical: 'evernote_connection',
+    mapArgs: () => ({ action: 'user' }),
+  },
 };
 
 export interface ResolvedTool {
