@@ -5,6 +5,9 @@ export interface EvernoteConfig {
   china?: boolean;
 }
 
+/** Output projection for a note body. */
+export type NoteFormat = "markdown" | "text" | "enml";
+
 export interface OAuthTokens {
   token: string;
   tokenSecret?: string;

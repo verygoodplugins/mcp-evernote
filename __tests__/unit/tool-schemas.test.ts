@@ -61,12 +61,32 @@ describe('tool schemas (M1)', () => {
       const result = SearchNotesSchema.parse({ query: 'test' });
       expect(result.includePreview).toBe(false);
     });
+
+    it('defaults offset, includeContent, and format', () => {
+      const result = SearchNotesSchema.parse({ query: 'test' });
+      expect(result.offset).toBe(0);
+      expect(result.includeContent).toBe(false);
+      expect(result.format).toBe('markdown');
+    });
+
+    it('rejects a negative offset', () => {
+      expect(() =>
+        SearchNotesSchema.parse({ query: 'test', offset: -1 }),
+      ).toThrow();
+    });
+
+    it('rejects an invalid format', () => {
+      expect(() =>
+        SearchNotesSchema.parse({ query: 'test', format: 'html' }),
+      ).toThrow();
+    });
   });
 
   describe('GetNoteSchema', () => {
-    it('defaults attachment text extraction to true', () => {
+    it('defaults attachment text extraction to true in single mode', () => {
       const result = GetNoteSchema.parse({ guid: 'abc-123' });
       expect(result.includeAttachmentText).toBe(true);
+      expect(result.format).toBe('markdown');
     });
 
     it('accepts the legacy includePdfContent flag', () => {
@@ -78,6 +98,32 @@ describe('tool schemas (M1)', () => {
     it('accepts the generic includeAttachmentText flag', () => {
       const result = GetNoteSchema.parse({ guid: 'abc-123', includeAttachmentText: false });
       expect(result.includeAttachmentText).toBe(false);
+    });
+
+    it('accepts a guids batch and defaults includeAttachmentText to false', () => {
+      const result = GetNoteSchema.parse({ guids: ['a', 'b'] });
+      expect(result.includeAttachmentText).toBe(false);
+      expect(result.format).toBe('markdown');
+    });
+
+    it('rejects when neither guid nor guids is provided', () => {
+      expect(() => GetNoteSchema.parse({})).toThrow(/exactly one of guid or guids/);
+    });
+
+    it('rejects when both guid and guids are provided', () => {
+      expect(() =>
+        GetNoteSchema.parse({ guid: 'a', guids: ['b'] }),
+      ).toThrow(/exactly one of guid or guids/);
+    });
+
+    it('rejects more than 25 guids', () => {
+      const many = Array.from({ length: 26 }, (_, i) => `g${i}`);
+      expect(() => GetNoteSchema.parse({ guids: many })).toThrow();
+    });
+
+    it('accepts a valid format and rejects an invalid one', () => {
+      expect(GetNoteSchema.parse({ guid: 'a', format: 'text' }).format).toBe('text');
+      expect(() => GetNoteSchema.parse({ guid: 'a', format: 'pdf' })).toThrow();
     });
   });
 
