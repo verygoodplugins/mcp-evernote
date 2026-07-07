@@ -112,16 +112,38 @@ directly in `evernote-api.ts`.
 
 ## MCP Tools
 
-The server defines **27 tools**, all prefixed `evernote_` (defined in the
-tools array starting at `src/index.ts:316`). They cover notes
-(`create_note`, `get_note`, `update_note`, `patch_note`, `delete_note`,
-`search_notes`), notebooks (`list_notebooks`, `get_notebook`,
-`create_notebook`, `update_notebook`), tags (`list_tags`, `get_tag`,
+The server defines **15 tools**, all prefixed `evernote_` (defined in the
+`tools` array in `src/index.ts`). They cover notes (`create_note`,
+`get_note`, `update_note`, `delete_note`, `search_notes`), notebooks
+(`list_notebooks`, `create_notebook`, `update_notebook`), tags (`list_tags`,
 `create_tag`, `update_tag`), resources/attachments (`get_resource`,
-`list_note_resources`, `add_resource_to_note`, `get_resource_recognition`,
-`get_resource_text`), auth/health (`get_user_info`, `revoke_auth`,
-`health_check`, `reconnect`), and polling (`start_polling`, `stop_polling`,
-`poll_now`, `polling_status`).
+`add_resource_to_note`), and two action-dispatched admin tools —
+`polling({action})` and `connection({action})`.
+
+**Consolidated surface (was 27).** Read/lifecycle operations are parameterized
+rather than multiplied into separate tools:
+- `get_resource({guid, as})` projects one attachment through `as: "text"`
+  (default; PDF/OCR extraction) | `"binary"` (base64) | `"recognition"` (OCR
+  data) | `"metadata"` (filename/mime/size/hash/hasRecognition). Replaces the
+  old `get_resource_text` / `get_resource_recognition` tools; a note's
+  attachment list comes from `get_note`'s `resources[]` (so no
+  `list_note_resources`).
+- `list_notebooks` / `list_tags` return the full list, or one entity when
+  passed a `name` or `guid` (absorbing the old `get_notebook` / `get_tag`).
+- `update_note` takes `replacements[]` for targeted find-and-replace (patch
+  mode, mutually exclusive with the full-field inputs) — absorbing the old
+  `patch_note`.
+- `polling({action: start|stop|poll|status})` and
+  `connection({action: status|user|reconnect|revoke})` replace the four
+  polling command tools and the four `health_check`/`get_user_info`/
+  `reconnect`/`revoke_auth` tools.
+
+**Backward-compatible aliases.** The 14 retired names stay callable: a
+`TOOL_ALIASES` map in `src/tool-aliases.ts` rewrites each to its canonical tool
+(and args) before validation in the `CallTool` dispatcher, logging a one-time
+deprecation notice. They are hidden from `ListTools` by default; set
+`EVERNOTE_LEGACY_TOOLS=true` to re-advertise them during a migration window.
+See `MIGRATION.md` for the full old→new mapping.
 
 Many tools accept user-friendly names but resolve to Evernote GUIDs
 internally (notebook names → GUIDs via `listNotebooks()`, tag names → GUIDs
@@ -270,7 +292,7 @@ releases reliably.
 
 ```text
 fix: resolve notebook GUID lookup for nested tags
-feat: add evernote_patch_note tool
+feat: add format projection to evernote_get_note
 docs: clarify standalone OAuth callback port
 chore: bump @modelcontextprotocol/sdk
 ```
@@ -283,8 +305,9 @@ chore: bump @modelcontextprotocol/sdk
 - Sandbox testing: set `EVERNOTE_ENVIRONMENT=sandbox` (requires a separate
   account at sandbox.evernote.com). For CI, prefer `EVERNOTE_ACCESS_TOKEN`;
   `.evernote-token.json` is a local fallback only.
-- Quick connectivity checks: `evernote_get_user_info` verifies auth;
-  `evernote_list_notebooks` confirms API connectivity.
+- Quick connectivity checks: `evernote_connection({action:"status"})` (or
+  `{action:"user"}`) verifies auth; `evernote_list_notebooks` confirms API
+  connectivity.
 
 <!-- BEGIN AUTOMEM RULES -->
 ## Memory-First Development (AutoMem)
