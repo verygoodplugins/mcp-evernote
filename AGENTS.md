@@ -193,6 +193,8 @@ fallbacks in code.
 | `EVERNOTE_MAX_CONCURRENCY` | `3` | `src/index.ts` | Max simultaneous NoteStore RPCs (shared FIFO semaphore in `src/concurrency.ts`); bounds burst width so a wide fan-out doesn't spike past the hourly rate limit |
 | `EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS` | `15` | `src/index.ts` | Auto-retry a rate-limited RPC (errorCode 19) **once** when Evernote's `rateLimitDuration` is ≤ this many seconds; `0` disables auto-retry. Longer waits return a structured error instead |
 | `EVERNOTE_MAX_RESPONSE_CHARS` | `60000` | `src/index.ts` | Total note-body character budget per multi-note response (`get_note` batch, `search_notes` with `includeContent`); bodies past the budget are dropped with `truncated: true` + original `contentLength` (see `src/response-budget.ts`). Keeps responses under the ~25k-token MCP cap |
+| `EVERNOTE_NOTE_CACHE_SIZE` | `200` | `src/index.ts` | Max notes held in the per-instance USN-keyed body cache (`src/note-cache.ts`); `0` disables it. Re-reading unchanged notes is served from memory instead of re-spending a `getNote` quota call |
+| `EVERNOTE_NOTE_CACHE_SYNC_TTL_MS` | `30000` | `src/index.ts` | How long a `getSyncState` result is trusted before the cache re-probes for external edits. Bounds the staleness window for edits made elsewhere; own writes evict immediately |
 
 Notes:
 - **Rate-limit handling.** Failed tool calls return a machine-parseable JSON
@@ -203,6 +205,23 @@ Notes:
   shapes bursts; it does **not** restore quota (the quota is a per-token hourly
   call count). The only real quota levers are fewer calls (caching) and honoring
   the backoff.
+- **Note body cache** (`src/note-cache.ts`). A per-`EvernoteAPI`-instance,
+  USN-keyed, LRU cache of note bodies (ENML + metadata; resource binaries and
+  recognition stripped). `get_note` (single + batch), `search_notes`
+  `includeContent`/`includePreview`, and previews read through it via
+  `EvernoteAPI.getNoteCached`. Invalidation is two-track: our **own** writes
+  (`updateNote`/`deleteNote`, so also `patch_note`/`add_resource_to_note`) evict
+  the GUID immediately (self-write consistency), while **external** edits are
+  caught by a TTL-gated `getSyncState` probe that then **loops**
+  `getFilteredSyncChunk` to evict precisely — deliberately *not* the polling
+  path's single-chunk force-advance, which silently skips changes past 100. Net:
+  staleness for edits made elsewhere is bounded by
+  `EVERNOTE_NOTE_CACHE_SYNC_TTL_MS`; reads after our own writes are immediately
+  consistent. Extracted OCR/attachment text is never cached (recognition updates
+  async without a USN bump) — it is always re-extracted live on read. Building
+  the cache in `ensureAPI()` means reconnect/`revoke_auth` starts a fresh cache
+  (multi-account safety). Polling's own >100-change truncation is a separate,
+  pre-existing limitation and is out of scope for the cache.
 - `EVERNOTE_POLL_INTERVAL` is clamped: the effective interval is
   `max(15min, EVERNOTE_POLL_INTERVAL)` — the 15-minute floor is an Evernote
   requirement (`src/index.ts:48`).

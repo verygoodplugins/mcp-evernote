@@ -34,6 +34,7 @@ import {
   isAuthErrorCode,
   RATE_LIMIT_ERROR_CODE,
 } from "./errors.js";
+import { NoteCache, NoteCacheOptions, NoteCacheSyncApi } from "./note-cache.js";
 
 const UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS = [2000, 4000, 8000];
 
@@ -99,11 +100,13 @@ export class EvernoteAPI {
   private noteStore: any;
   private client: any;
   private readonly sleep: (ms: number) => Promise<void>;
+  // USN-keyed body cache; null when disabled (EVERNOTE_NOTE_CACHE_SIZE=0).
+  private readonly noteCache: NoteCache | null;
 
   constructor(
     client: any,
     tokens: OAuthTokens,
-    options?: Partial<RpcLimitOptions>,
+    options?: Partial<RpcLimitOptions> & { noteCache?: NoteCacheOptions },
   ) {
     this.client = client;
     const rpcLimitOptions = resolveRpcLimitOptions(options);
@@ -114,6 +117,36 @@ export class EvernoteAPI {
       client.getNoteStore(tokens.noteStoreUrl),
       rpcLimitOptions,
     );
+    const cache = new NoteCache(options?.noteCache ?? {});
+    this.noteCache = cache.enabled ? cache : null;
+  }
+
+  /**
+   * Read-through body cache for note reads. Serves an unchanged note from memory
+   * (after a TTL-gated sync check evicts anything edited elsewhere) instead of
+   * re-spending an hourly-quota `getNote` call. Always fetches WITH content, so
+   * callers that don't want a body should call `getNote` directly.
+   *
+   * On a hit, resource binaries are stripped, so a caller that needs attachment
+   * text still extracts it live (extractResourceText re-fetches). On a miss the
+   * full note (bodies inline) is returned and a stripped copy is cached.
+   */
+  async getNoteCached(
+    guid: string,
+    opts: { withResources?: boolean } = {},
+  ): Promise<any> {
+    const withResources = opts.withResources ?? false;
+    if (!this.noteCache) {
+      return this.getNote(guid, true, withResources);
+    }
+    await this.noteCache.ensureFresh(this as unknown as NoteCacheSyncApi);
+    const hit = this.noteCache.get(guid, withResources);
+    if (hit !== undefined) {
+      return hit;
+    }
+    const note = await this.getNote(guid, true, withResources);
+    this.noteCache.set(guid, note, withResources);
+    return note;
   }
 
   // Note operations
@@ -186,7 +219,7 @@ export class EvernoteAPI {
     guid: string,
     maxLength: number = 300,
   ): Promise<string | null> {
-    const note = await this.noteStore.getNote(guid, true, false, false, false);
+    const note = await this.getNoteCached(guid, { withResources: false });
     if (!note.content) {
       return null;
     }
@@ -242,7 +275,11 @@ export class EvernoteAPI {
     for (let i = 0; i < guids.length; i++) {
       const guid = guids[i];
       try {
-        const note = await this.getNote(guid, opts.includeContent, false);
+        // Route body-bearing fetches through the cache; a metadata-only fetch
+        // (includeContent=false) has no body worth caching, so hit the API.
+        const note = opts.includeContent
+          ? await this.getNoteCached(guid, { withResources: false })
+          : await this.getNote(guid, false, false);
         const entry: BatchNoteEntry = {
           guid: note.guid,
           title: note.title,
@@ -333,6 +370,10 @@ export class EvernoteAPI {
 
       const result = await this.noteStore.updateNote(note);
       console.error(`Note update successful for ${note.guid}`);
+      // Self-write eviction: our own edit bumps the note USN, so drop the stale
+      // body immediately (covers patch_note / add_resource_to_note, which route
+      // through updateNote) instead of waiting for the next sync probe.
+      this.noteCache?.evict(note.guid);
       return result;
     } catch (error: any) {
       console.error(
@@ -370,6 +411,7 @@ export class EvernoteAPI {
 
   async deleteNote(guid: string): Promise<void> {
     await this.noteStore.deleteNote(guid);
+    this.noteCache?.evict(guid);
   }
 
   async patchNoteContent(
