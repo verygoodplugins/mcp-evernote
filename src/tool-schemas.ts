@@ -142,10 +142,12 @@ export const ListNoteResourcesSchema = z.object({
 });
 
 // list_notebooks lists all notebooks, or returns one (fresh, full detail) when
-// name or guid is given — absorbing the retired get_notebook.
+// name or guid is given — absorbing the retired get_notebook. name/guid must be
+// non-empty when present so an empty-string lookup errors instead of silently
+// listing all.
 export const ListNotebooksSchema = z.object({
-  name: z.string().optional(),
-  guid: z.string().optional(),
+  name: z.string().min(1, 'name must not be empty').optional(),
+  guid: z.string().min(1, 'guid must not be empty').optional(),
 });
 
 export const UpdateNotebookSchema = z.object({
@@ -155,10 +157,11 @@ export const UpdateNotebookSchema = z.object({
 });
 
 // list_tags lists all tags, or returns one (fresh, full detail) when name or
-// guid is given — absorbing the retired get_tag.
+// guid is given — absorbing the retired get_tag. name/guid must be non-empty
+// when present so an empty-string lookup errors instead of silently listing all.
 export const ListTagsSchema = z.object({
-  name: z.string().optional(),
-  guid: z.string().optional(),
+  name: z.string().min(1, 'name must not be empty').optional(),
+  guid: z.string().min(1, 'guid must not be empty').optional(),
 });
 
 export const UpdateTagSchema = z.object({

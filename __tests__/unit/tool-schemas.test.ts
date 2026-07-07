@@ -222,6 +222,12 @@ describe('tool schemas (M1)', () => {
       const result = ListNotebooksSchema.parse({ guid: 'abc' });
       expect(result.guid).toBe('abc');
     });
+
+    it('rejects an empty-string name (would otherwise list-all)', () => {
+      expect(() => ListNotebooksSchema.parse({ name: '' })).toThrow(
+        /name must not be empty/,
+      );
+    });
   });
 
   describe('ListTagsSchema', () => {

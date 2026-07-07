@@ -110,6 +110,9 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
   evernote_patch_note: {
     canonical: 'evernote_update_note',
     mapArgs: (a) => ({ guid: a.guid, replacements: a.replacements }),
+    // Without replacements the old tool errored; guard so it doesn't fall
+    // through to a no-op full update.
+    requireOneOf: ['replacements'],
     sampleArgs: { guid: 'n1', replacements: [{ find: 'a', replace: 'b' }] },
   },
 };
