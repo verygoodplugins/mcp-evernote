@@ -37,6 +37,14 @@ const EDAM_ERROR_NAMES: Record<number, string> = {
 /** EDAMErrorCode.RATE_LIMIT_REACHED */
 export const RATE_LIMIT_ERROR_CODE = 19;
 
+/** EDAMErrorCode.INVALID_AUTH / AUTH_EXPIRED — the token needs re-auth. */
+export const AUTH_ERROR_CODES = [8, 9];
+
+/** True when an error code signals an authentication failure (8 or 9). */
+export function isAuthErrorCode(errorCode?: number): boolean {
+  return errorCode != null && AUTH_ERROR_CODES.includes(errorCode);
+}
+
 export interface ToolErrorPayload {
   /** `rate_limited` iff errorCode 19; otherwise `evernote_error`. */
   error: "rate_limited" | "evernote_error";

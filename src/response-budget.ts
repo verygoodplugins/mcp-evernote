@@ -28,6 +28,12 @@ export function applyCharBudget<T extends BudgetedNote>(
   notes: T[],
   budgetChars: number,
 ): CharBudgetResult<T> {
+  // Defensive: a non-finite budget (e.g. from a bad env value) must not clip
+  // every body to an empty string — treat it as unlimited.
+  if (!Number.isFinite(budgetChars)) {
+    return { notes, truncatedCount: 0 };
+  }
+
   let used = 0;
   let truncatedCount = 0;
 

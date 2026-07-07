@@ -48,4 +48,11 @@ describe("applyCharBudget", () => {
     expect(res.notes[0]).toEqual({ guid: "a" });
     expect(res.notes[1].content).toBe("xy");
   });
+
+  it("treats a non-finite budget as unlimited (no clipping)", () => {
+    const notes: BudgetedNote[] = [{ guid: "a", content: "keep me whole" }];
+    const res = applyCharBudget(notes, Number.NaN);
+    expect(res.truncatedCount).toBe(0);
+    expect(res.notes[0].content).toBe("keep me whole");
+  });
 });

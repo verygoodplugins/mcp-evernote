@@ -98,10 +98,18 @@ const RPC_LIMIT_OPTIONS: Partial<RpcLimitOptions> = {
 
 // Total content-character budget for multi-note responses, to stay under the
 // MCP response token cap. Bodies past this are dropped with `truncated: true`.
-const MAX_RESPONSE_CHARS = parseInt(
-  process.env.EVERNOTE_MAX_RESPONSE_CHARS || String(DEFAULT_MAX_RESPONSE_CHARS),
-  10,
-);
+// A non-numeric / non-positive env value falls back to the default (a NaN
+// budget would slice every body to an empty string).
+const MAX_RESPONSE_CHARS = (() => {
+  const parsed = parseInt(
+    process.env.EVERNOTE_MAX_RESPONSE_CHARS ||
+      String(DEFAULT_MAX_RESPONSE_CHARS),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_RESPONSE_CHARS;
+})();
 
 // Polling state
 let lastUpdateCount: number | null = null;
@@ -1333,8 +1341,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        // Evernote's match-all is expressed by OMITTING words; a bare "*" is
+        // not a valid text term. Translate it so the documented export path
+        // (query "*" + notebookName) works.
+        const words = query.trim() === "*" ? undefined : query;
+
         const results = await evernoteApi.searchNotes({
-          words: query,
+          words,
           notebookGuid,
           offset,
           maxNotes: Math.min(effectiveMax, 100),
@@ -1427,7 +1440,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
 
         const returned = budgetedNotes.length;
-        const hasMore = offset + returned < results.totalNotes;
+        // When a content batch aborts mid-page, only advance past the notes
+        // whose bodies were actually fetched — otherwise paging would skip the
+        // un-fetched notes and the documented export loop would lose them. The
+        // fetched count is exactly the size of contentByGuid.
+        const progressed =
+          batchAborted && contentByGuid ? contentByGuid.size : returned;
+        const hasMore = batchAborted
+          ? true
+          : offset + returned < results.totalNotes;
         const payload: any = {
           totalNotes: results.totalNotes,
           offset,
@@ -1436,7 +1457,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           notes: budgetedNotes,
         };
         if (hasMore) {
-          payload.nextOffset = offset + returned;
+          payload.nextOffset = offset + progressed;
         }
         if (includeContent && effectiveMax !== maxResults) {
           payload.maxResultsApplied = effectiveMax;
@@ -1478,11 +1499,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             format,
           });
 
-          // Best-effort notebook-name enrichment from the cache (no API call).
+          // Best-effort name enrichment from the caches (no extra API calls).
+          // getNote returns tags as GUIDs, so resolve them like search does.
           let notebookNames: Map<string, string> | undefined;
+          let tagNames: Map<string, string> | undefined;
+          const anyTags = batch.notes.some(
+            (n) => n.tagGuids && n.tagGuids.length > 0,
+          );
           try {
             const notebooks = await getCachedNotebooks(evernoteApi);
             notebookNames = new Map(notebooks.map((n) => [n.guid!, n.name!]));
+            if (anyTags) {
+              const tags = await getCachedTags(evernoteApi);
+              tagNames = new Map(tags.map((t: any) => [t.guid!, t.name!]));
+            }
           } catch {
             // enrichment is best-effort; never fail the batch over it.
           }
@@ -1501,8 +1531,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 out.notebookName = name;
               }
             }
-            if (n.tagNames && n.tagNames.length > 0) {
-              out.tags = n.tagNames;
+            if (n.tagGuids && n.tagGuids.length > 0) {
+              const names = n.tagGuids
+                .map((g) => tagNames?.get(g))
+                .filter(Boolean);
+              if (names.length > 0) {
+                out.tags = names;
+              }
             }
             if (n.contentLength != null) {
               out.contentLength = n.contentLength;

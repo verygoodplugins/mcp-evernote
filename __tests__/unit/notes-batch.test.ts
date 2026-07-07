@@ -23,7 +23,8 @@ const noteFixture = (guid: string, content?: string) => ({
   created: 1700000000000,
   updated: 1700000001000,
   notebookGuid: "nb1",
-  tagNames: ["poem"],
+  // getNote returns tags as GUIDs, not names.
+  tagGuids: ["tg1"],
   contentLength: content ? content.length : 0,
   content,
 });
@@ -47,9 +48,28 @@ describe("EvernoteAPI.getNotesBatch", () => {
       guid: "g1",
       title: "T-g1",
       notebookGuid: "nb1",
-      tagNames: ["poem"],
+      tagGuids: ["tg1"],
     });
     expect(res.notes[0].content).toContain("Hello g1");
+  });
+
+  it("rethrows auth failures instead of burying them in `failed`", async () => {
+    const getNote = jest.fn(async (guid: string) => {
+      if (guid === "g2") {
+        const e: any = new Error("authentication expired");
+        e.errorCode = 9;
+        throw e;
+      }
+      return noteFixture(guid, `<en-note>${guid}</en-note>`);
+    });
+    const api = makeApi(getNote);
+
+    await expect(
+      api.getNotesBatch(["g1", "g2", "g3"], {
+        includeContent: true,
+        format: "markdown",
+      }),
+    ).rejects.toThrow("authentication expired");
   });
 
   it("aborts on a mid-batch rate limit and returns the remaining guids", async () => {

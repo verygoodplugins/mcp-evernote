@@ -29,7 +29,11 @@ import {
   resolveRpcLimitOptions,
   RpcLimitOptions,
 } from "./concurrency.js";
-import { getEvernoteErrorMeta, RATE_LIMIT_ERROR_CODE } from "./errors.js";
+import {
+  getEvernoteErrorMeta,
+  isAuthErrorCode,
+  RATE_LIMIT_ERROR_CODE,
+} from "./errors.js";
 
 const UPDATE_NOTE_EDIT_LOCK_RETRY_DELAYS_MS = [2000, 4000, 8000];
 
@@ -54,7 +58,9 @@ export interface BatchNoteEntry {
   created?: string;
   updated?: string;
   notebookGuid?: string;
-  tagNames?: string[];
+  // getNote returns applied tags as GUIDs (tagNames is unset on reads); the
+  // handler resolves these to names via the tag cache.
+  tagGuids?: string[];
   contentLength?: number;
   content?: string;
 }
@@ -247,7 +253,7 @@ export class EvernoteAPI {
             ? new Date(note.updated).toISOString()
             : undefined,
           notebookGuid: note.notebookGuid,
-          tagNames: note.tagNames,
+          tagGuids: note.tagGuids,
           contentLength:
             note.contentLength ??
             (typeof note.content === "string" ? note.content.length : undefined),
@@ -262,6 +268,13 @@ export class EvernoteAPI {
         notes.push(entry);
       } catch (error: any) {
         const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+        if (isAuthErrorCode(errorCode)) {
+          // Auth failure is fatal for the whole batch (every remaining guid
+          // would fail identically). Rethrow so the tool's auth-recovery path
+          // runs and the client is told to reconnect, rather than burying it
+          // in a per-note `failed` entry and returning success.
+          throw error;
+        }
         if (errorCode === RATE_LIMIT_ERROR_CODE) {
           // Once the hourly quota trips, every subsequent call fails the same
           // way — stop and hand back what we have plus how to resume.
