@@ -177,6 +177,18 @@ describe('tool schemas (M1)', () => {
           }),
         ).toThrow(/cannot be combined/);
       });
+
+      it('rejects combining replacements with forceUpdate', () => {
+        expect(() =>
+          UpdateNoteSchema.parse({
+            guid: 'abc',
+            forceUpdate: true,
+            forceUpdateConfirmation:
+              'I understand this will delete the original note',
+            replacements: [{ find: 'old', replace: 'new' }],
+          }),
+        ).toThrow(/forceUpdate is not supported in patch mode/);
+      });
     });
   });
 

@@ -25,7 +25,7 @@ will be removed in a future major.
 | `get_resource({guid, includeData:false})` | `get_resource({guid, as:"metadata"})` |
 | `get_resource_text({resourceGuid})` | `get_resource({guid, as:"text"})` |
 | `get_resource_recognition({resourceGuid})` | `get_resource({guid, as:"recognition"})` |
-| `list_note_resources({noteGuid})` | `get_note({guid, includeAttachmentText:false})` → read `resources[]` |
+| `list_note_resources({noteGuid})` | `get_note({guid, includeAttachmentText:false})` → read `resources[]` (see note) |
 
 `as:"metadata"` returns `{guid, filename, mimeType, size, hash, hasRecognition}`
 for a single attachment — the same per-resource fields the old
@@ -33,6 +33,13 @@ for a single attachment — the same per-resource fields the old
 attachments with `{guid, filename, mimeType, size}` (no `hash`/`hasRecognition`;
 fetch those per-attachment via `as:"metadata"`). `add_resource_to_note` is
 unchanged.
+
+**`list_note_resources` stays byte-for-byte compatible.** Unlike the other
+retired names, it is *not* a pure alias: it keeps a dedicated hidden handler so
+its response is still the original top-level array
+`[{guid, filename, mimeType, size, hash, hasRecognition}]`, not `get_note`'s
+nested object. It remains off the default tool surface (re-listed under
+`EVERNOTE_LEGACY_TOOLS`); new code should prefer `get_note`.
 
 ### Polling (4 → 1)
 

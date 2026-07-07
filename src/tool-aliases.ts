@@ -42,15 +42,10 @@ export const TOOL_ALIASES: Record<string, ToolAlias> = {
     mapArgs: (a) => ({ guid: a.resourceGuid, as: 'recognition' }),
     sampleArgs: { resourceGuid: 'r1' },
   },
-  evernote_list_note_resources: {
-    canonical: 'evernote_get_note',
-    mapArgs: (a) => ({
-      guid: a.noteGuid,
-      includeContent: false,
-      includeAttachmentText: false,
-    }),
-    sampleArgs: { noteGuid: 'n1' },
-  },
+  // NOTE: evernote_list_note_resources is intentionally NOT aliased. Its old
+  // response was a top-level array (with hash/hasRecognition), which get_note's
+  // nested resources[] can't reproduce, so it is kept as a hidden, shape-exact
+  // legacy handler in the dispatcher instead (still off the default surface).
 
   // Polling 4 -> 1 (PR 2): evernote_polling({ action }).
   evernote_start_polling: {

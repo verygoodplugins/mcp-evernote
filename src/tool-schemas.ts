@@ -85,6 +85,17 @@ export const UpdateNoteSchema = z.object({
         'replacements (patch mode) cannot be combined with title, content, tags, or notebookName',
     });
   }
+  // Patch mode routes through patchNoteContent and never reaches the
+  // forceUpdate edit-lock fallback, so reject the combination rather than
+  // silently ignoring the destructive-retry request.
+  if (data.replacements && data.forceUpdate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['forceUpdate'],
+      message:
+        'forceUpdate is not supported in patch mode (replacements); omit it or use a full-field update',
+    });
+  }
 });
 
 export const DeleteNoteSchema = z.object({
@@ -123,6 +134,11 @@ export const AddResourceToNoteSchema = z.object({
   noteGuid: z.string().min(1, 'Note GUID is required'),
   filePath: z.string().min(1, 'File path is required'),
   filename: z.string().optional(),
+});
+
+// Retired but kept as a hidden, shape-exact legacy handler (see tool-aliases.ts).
+export const ListNoteResourcesSchema = z.object({
+  noteGuid: z.string().min(1, 'Note GUID is required'),
 });
 
 // list_notebooks lists all notebooks, or returns one (fresh, full detail) when
@@ -171,6 +187,7 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_create_tag: CreateTagSchema,
   evernote_get_resource: GetResourceSchema,
   evernote_add_resource_to_note: AddResourceToNoteSchema,
+  evernote_list_note_resources: ListNoteResourcesSchema,
   evernote_list_notebooks: ListNotebooksSchema,
   evernote_update_notebook: UpdateNotebookSchema,
   evernote_list_tags: ListTagsSchema,

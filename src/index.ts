@@ -2303,6 +2303,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      // Retired from the default surface but preserved as a hidden, shape-exact
+      // legacy handler: its response is a top-level array (with hash +
+      // hasRecognition), which the get_note resources[] projection can't
+      // reproduce. New callers should use evernote_get_note.
+      case "evernote_list_note_resources": {
+        warnDeprecatedAlias(
+          "evernote_list_note_resources",
+          "evernote_get_note",
+        );
+        const { noteGuid } = validatedArgs;
+        const note = await evernoteApi.getNote(noteGuid, false, true);
+        const resources = (note.resources || []).map((r: any) => ({
+          guid: r.guid,
+          filename: r.attributes?.fileName,
+          mimeType: r.mime,
+          size: r.data?.size || 0,
+          hash: r.data?.bodyHash
+            ? Buffer.from(r.data.bodyHash).toString("hex")
+            : "",
+          hasRecognition: !!r.recognition,
+        }));
+
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(resources, null, 2) },
+          ],
+        };
+      }
+
       case "evernote_update_notebook": {
         const { guid, name, stack } = validatedArgs;
         const notebook = await evernoteApi.getNotebook(guid);
