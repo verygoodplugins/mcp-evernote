@@ -11,6 +11,7 @@ import {
   GetNotebookSchema,
   GetTagSchema,
   AddResourceToNoteSchema,
+  GetResourceSchema,
   HealthCheckSchema,
   validateToolArgs,
 } from '../../src/tool-schemas';
@@ -204,6 +205,42 @@ describe('tool schemas (M1)', () => {
       expect(() =>
         AddResourceToNoteSchema.parse({ noteGuid: 'abc' }),
       ).toThrow();
+    });
+  });
+
+  describe('GetResourceSchema', () => {
+    it('defaults as to "text" when neither as nor includeData is given', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1' });
+      expect(result.as).toBe('text');
+    });
+
+    it('honors an explicit as view', () => {
+      expect(GetResourceSchema.parse({ guid: 'r1', as: 'recognition' }).as).toBe(
+        'recognition',
+      );
+    });
+
+    it('maps deprecated includeData:true to binary', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1', includeData: true });
+      expect(result.as).toBe('binary');
+    });
+
+    it('maps deprecated includeData:false to metadata', () => {
+      const result = GetResourceSchema.parse({ guid: 'r1', includeData: false });
+      expect(result.as).toBe('metadata');
+    });
+
+    it('lets an explicit as win over includeData', () => {
+      const result = GetResourceSchema.parse({
+        guid: 'r1',
+        as: 'text',
+        includeData: true,
+      });
+      expect(result.as).toBe('text');
+    });
+
+    it('rejects an unknown as view', () => {
+      expect(() => GetResourceSchema.parse({ guid: 'r1', as: 'thumbnail' })).toThrow();
     });
   });
 

@@ -40,10 +40,6 @@ export const GetNoteSchema = z.object({
     (data.guids ? false : true),
 }));
 
-export const GetResourceTextSchema = z.object({
-  resourceGuid: z.string().min(1, 'Resource GUID is required'),
-});
-
 export const UpdateNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   title: z.string().optional(),
@@ -74,23 +70,28 @@ export const CreateTagSchema = z.object({
   parentTagName: z.string().optional(),
 });
 
+// get_resource projects one attachment through one of four views. Default
+// `text` is the agent-usual case; base64 `binary` must be requested explicitly.
+// `includeData` is a deprecated alias: true -> binary, false -> metadata.
 export const GetResourceSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
-  includeData: z.boolean().optional().default(true),
-});
-
-export const ListNoteResourcesSchema = z.object({
-  noteGuid: z.string().min(1, 'Note GUID is required'),
-});
+  as: z.enum(['text', 'binary', 'recognition', 'metadata']).optional(),
+  includeData: z.boolean().optional(),
+}).transform(data => ({
+  guid: data.guid,
+  as:
+    data.as ??
+    (data.includeData === undefined
+      ? 'text'
+      : data.includeData
+        ? 'binary'
+        : 'metadata'),
+}));
 
 export const AddResourceToNoteSchema = z.object({
   noteGuid: z.string().min(1, 'Note GUID is required'),
   filePath: z.string().min(1, 'File path is required'),
   filename: z.string().optional(),
-});
-
-export const GetResourceRecognitionSchema = z.object({
-  resourceGuid: z.string().min(1, 'Resource GUID is required'),
 });
 
 export const GetNotebookSchema = z.object({
@@ -142,16 +143,13 @@ export const toolSchemas: Record<string, z.ZodType<any>> = {
   evernote_create_notebook: CreateNotebookSchema,
   evernote_create_tag: CreateTagSchema,
   evernote_get_resource: GetResourceSchema,
-  evernote_list_note_resources: ListNoteResourcesSchema,
   evernote_add_resource_to_note: AddResourceToNoteSchema,
-  evernote_get_resource_recognition: GetResourceRecognitionSchema,
   evernote_get_notebook: GetNotebookSchema,
   evernote_update_notebook: UpdateNotebookSchema,
   evernote_get_tag: GetTagSchema,
   evernote_update_tag: UpdateTagSchema,
   evernote_patch_note: PatchNoteSchema,
   evernote_health_check: HealthCheckSchema,
-  evernote_get_resource_text: GetResourceTextSchema,
 };
 
 /**

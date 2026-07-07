@@ -937,7 +937,8 @@ const tools: Tool[] = [
   // Resource tools
   {
     name: "evernote_get_resource",
-    description: "Download a resource (attachment) by its GUID",
+    description:
+      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -945,27 +946,15 @@ const tools: Tool[] = [
           type: "string",
           description: "Resource GUID",
         },
-        includeData: {
-          type: "boolean",
-          description: "Include binary data as base64 (default: true)",
-          default: true,
+        as: {
+          type: "string",
+          enum: ["text", "binary", "recognition", "metadata"],
+          description:
+            "View to return (default: text). binary = base64 body; recognition = OCR data; metadata = info without the body.",
+          default: "text",
         },
       },
       required: ["guid"],
-    },
-  },
-  {
-    name: "evernote_list_note_resources",
-    description: "List all resources (attachments) in a note",
-    inputSchema: {
-      type: "object",
-      properties: {
-        noteGuid: {
-          type: "string",
-          description: "Note GUID",
-        },
-      },
-      required: ["noteGuid"],
     },
   },
   {
@@ -988,35 +977,6 @@ const tools: Tool[] = [
         },
       },
       required: ["noteGuid", "filePath"],
-    },
-  },
-  {
-    name: "evernote_get_resource_recognition",
-    description: "Get OCR/text recognition data from an image resource",
-    inputSchema: {
-      type: "object",
-      properties: {
-        resourceGuid: {
-          type: "string",
-          description: "Resource GUID",
-        },
-      },
-      required: ["resourceGuid"],
-    },
-  },
-  {
-    name: "evernote_get_resource_text",
-    description:
-      "Extract plain text from a resource attachment. Supports PDF text layers and Evernote OCR recognition for images. Returns the text content or an explanatory message if extraction is unavailable.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        resourceGuid: {
-          type: "string",
-          description: "Resource GUID of the attachment",
-        },
-      },
-      required: ["resourceGuid"],
     },
   },
   // Notebook get/update tools
@@ -1141,10 +1101,50 @@ const tools: Tool[] = [
 ];
 
 // List tools handler — injects live notebook names into descriptions when available
-// Retired tool names re-advertised only when EVERNOTE_LEGACY_TOOLS=true. The
-// consolidation PRs move each retired Tool definition here (with a
-// `[DEPRECATED — use <canonical>]` description); empty until then.
-const legacyTools: Tool[] = [];
+// Retired tool names re-advertised only when EVERNOTE_LEGACY_TOOLS=true. Each
+// stays callable via TOOL_ALIASES regardless; this array only controls
+// discover-by-list visibility during the deprecation window.
+const legacyTools: Tool[] = [
+  {
+    name: "evernote_list_note_resources",
+    description:
+      "[DEPRECATED — use evernote_get_note; its resources[] lists attachments] List all resources (attachments) in a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        noteGuid: { type: "string", description: "Note GUID" },
+      },
+      required: ["noteGuid"],
+    },
+  },
+  {
+    name: "evernote_get_resource_recognition",
+    description:
+      "[DEPRECATED — use evernote_get_resource with as:\"recognition\"] Get OCR/text recognition data from an image resource.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resourceGuid: { type: "string", description: "Resource GUID" },
+      },
+      required: ["resourceGuid"],
+    },
+  },
+  {
+    name: "evernote_get_resource_text",
+    description:
+      "[DEPRECATED — use evernote_get_resource with as:\"text\"] Extract plain text from a resource attachment (PDF text layers and Evernote OCR for images).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resourceGuid: {
+          type: "string",
+          description: "Resource GUID of the attachment",
+        },
+      },
+      required: ["resourceGuid"],
+    },
+  },
+];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   notebookCache = await resolveNotebookCacheForToolDescriptions({
@@ -1991,8 +1991,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Resource tools
       case "evernote_get_resource": {
-        const { guid, includeData = true } = validatedArgs;
-        const resource = await evernoteApi.getResource(guid, includeData);
+        const { guid, as } = validatedArgs;
+
+        if (as === "text") {
+          const text = await evernoteApi.extractResourceText(guid);
+          return { content: [{ type: "text", text }] };
+        }
+
+        if (as === "recognition") {
+          const recognition = await evernoteApi.getResourceRecognition(guid);
+          const allText = evernoteApi.extractTextFromRecognition(recognition);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ...recognition,
+                    extractedText: allText || "(no text recognized)",
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
+        // as: "binary" | "metadata" — both return resource info (incl. fileName
+        // via withAttributes). binary adds the base64 body; metadata adds
+        // hasRecognition (fetched without the body).
+        const withData = as === "binary";
+        const resource = await evernoteApi.getResource(
+          guid,
+          withData,
+          as === "metadata",
+          true,
+        );
 
         const result: any = {
           guid: resource.guid,
@@ -2004,7 +2039,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : "",
         };
 
-        if (includeData && resource.data?.body) {
+        if (as === "metadata") {
+          result.hasRecognition = !!resource.recognition;
+        }
+
+        if (withData && resource.data?.body) {
           result.data = Buffer.from(resource.data.body).toString("base64");
         }
 
@@ -2013,20 +2052,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case "evernote_list_note_resources": {
-        const { noteGuid } = validatedArgs;
-        const resources = await evernoteApi.listNoteResources(noteGuid);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(resources, null, 2),
             },
           ],
         };
@@ -2045,45 +2070,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `✅ Resource added successfully!\nNote GUID: ${updatedNote.guid}\nNote Title: ${updatedNote.title}`,
-            },
-          ],
-        };
-      }
-
-      case "evernote_get_resource_recognition": {
-        const { resourceGuid } = validatedArgs;
-        const recognition =
-          await evernoteApi.getResourceRecognition(resourceGuid);
-
-        // Extract just the text for a summary
-        const allText = evernoteApi.extractTextFromRecognition(recognition);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  ...recognition,
-                  extractedText: allText || "(no text recognized)",
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      }
-
-      case "evernote_get_resource_text": {
-        const { resourceGuid } = validatedArgs;
-        const text = await evernoteApi.extractResourceText(resourceGuid);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text,
             },
           ],
         };

@@ -14,7 +14,6 @@ import {
   OAuthTokens,
   RecognitionData,
   RecognitionItem,
-  ResourceInfo,
   NoteReplacement,
   PatchNoteResult,
   NoteFormat,
@@ -673,12 +672,17 @@ export class EvernoteAPI {
   }
 
   // Resource operations
-  async getResource(guid: string, withData: boolean = true): Promise<any> {
+  async getResource(
+    guid: string,
+    withData: boolean = true,
+    withRecognition: boolean = false,
+    withAttributes: boolean = false,
+  ): Promise<any> {
     return await this.noteStore.getResource(
       guid,
       withData,
-      false,
-      false,
+      withRecognition,
+      withAttributes,
       false,
     );
   }
@@ -779,31 +783,6 @@ export class EvernoteAPI {
     }
 
     return recognitionText || "[No OCR text recognized for resource]";
-  }
-
-  async listNoteResources(noteGuid: string): Promise<ResourceInfo[]> {
-    const note = await this.noteStore.getNote(
-      noteGuid,
-      false,
-      true,
-      false,
-      false,
-    );
-
-    if (!note.resources || note.resources.length === 0) {
-      return [];
-    }
-
-    return note.resources.map((r: any) => ({
-      guid: r.guid,
-      filename: r.attributes?.fileName,
-      mimeType: r.mime,
-      size: r.data?.size || 0,
-      hash: r.data?.bodyHash
-        ? Buffer.from(r.data.bodyHash).toString("hex")
-        : "",
-      hasRecognition: !!r.recognition,
-    }));
   }
 
   async addResourceToNote(

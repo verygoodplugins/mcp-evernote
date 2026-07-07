@@ -29,7 +29,29 @@ export interface ToolAlias {
  * Retired tool name -> canonical routing. Empty until tools are retired by the
  * consolidation PRs (resources, polling, connection, notebooks/tags, notes).
  */
-export const TOOL_ALIASES: Record<string, ToolAlias> = {};
+export const TOOL_ALIASES: Record<string, ToolAlias> = {
+  // Resources 5 -> 2 (PR 1): get_resource projects via `as`; list_note_resources
+  // is dropped in favor of get_note's resources[] metadata.
+  evernote_get_resource_text: {
+    canonical: 'evernote_get_resource',
+    mapArgs: (a) => ({ guid: a.resourceGuid, as: 'text' }),
+    sampleArgs: { resourceGuid: 'r1' },
+  },
+  evernote_get_resource_recognition: {
+    canonical: 'evernote_get_resource',
+    mapArgs: (a) => ({ guid: a.resourceGuid, as: 'recognition' }),
+    sampleArgs: { resourceGuid: 'r1' },
+  },
+  evernote_list_note_resources: {
+    canonical: 'evernote_get_note',
+    mapArgs: (a) => ({
+      guid: a.noteGuid,
+      includeContent: false,
+      includeAttachmentText: false,
+    }),
+    sampleArgs: { noteGuid: 'n1' },
+  },
+};
 
 export interface ResolvedTool {
   /** Canonical tool name to dispatch. */
