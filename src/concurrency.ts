@@ -36,7 +36,7 @@ export class Semaphore {
   private readonly waiters: Array<() => void> = [];
 
   constructor(capacity: number) {
-    this.available = Math.max(1, Math.floor(capacity));
+    this.available = resolveIntegerOption(capacity, 1, 1);
   }
 
   async acquire(): Promise<() => void> {
@@ -76,17 +76,28 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveIntegerOption(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+): number {
+  const resolved = Math.floor(value ?? fallback);
+  return Number.isFinite(resolved) ? Math.max(min, resolved) : fallback;
+}
+
 export function resolveRpcLimitOptions(
   opts?: Partial<RpcLimitOptions>,
 ): RpcLimitOptions {
   return {
-    maxConcurrency: Math.max(
+    maxConcurrency: resolveIntegerOption(
+      opts?.maxConcurrency,
+      DEFAULT_MAX_CONCURRENCY,
       1,
-      Math.floor(opts?.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY),
     ),
-    rateLimitAutoRetrySeconds: Math.max(
+    rateLimitAutoRetrySeconds: resolveIntegerOption(
+      opts?.rateLimitAutoRetrySeconds,
+      DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
       0,
-      opts?.rateLimitAutoRetrySeconds ?? DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
     ),
     sleep: opts?.sleep,
   };

@@ -89,6 +89,30 @@ describe("Semaphore", () => {
     release(); // second call must not add a phantom permit
     expect(sem.availablePermits).toBe(1);
   });
+
+  it("falls back to one permit for non-finite capacity", async () => {
+    const sem = new Semaphore(Number.NaN);
+    expect(sem.availablePermits).toBe(1);
+
+    const release = await sem.acquire();
+    expect(sem.availablePermits).toBe(0);
+    release();
+    expect(sem.availablePermits).toBe(1);
+  });
+});
+
+describe("resolveRpcLimitOptions", () => {
+  it("falls back to defaults for non-finite numeric options", () => {
+    expect(
+      resolveRpcLimitOptions({
+        maxConcurrency: Number.NaN,
+        rateLimitAutoRetrySeconds: Number.NaN,
+      }),
+    ).toMatchObject({
+      maxConcurrency: 3,
+      rateLimitAutoRetrySeconds: 15,
+    });
+  });
 });
 
 describe("limitNoteStoreMethods", () => {
@@ -270,5 +294,28 @@ describe("EvernoteAPI RPC limiting", () => {
       noteGuid: "g1",
     });
     expect(updateNote).toHaveBeenCalledTimes(1);
+  });
+
+  it("updateNote retries edit-lock code 19 when no retry-after window is present", async () => {
+    const sleep = jest.fn(async () => {});
+    const updateNote = jest.fn(async () => {
+      if (updateNote.mock.calls.length < 3) {
+        const e: any = new Error("RTE room already open");
+        e.errorCode = 19;
+        throw e;
+      }
+      return { guid: "g1", title: "ok" };
+    });
+    const api = makeApi(
+      { updateNote },
+      { rateLimitAutoRetrySeconds: 15, sleep },
+    );
+
+    await expect(api.updateNote({ guid: "g1" })).resolves.toMatchObject({
+      guid: "g1",
+      title: "ok",
+    });
+    expect(updateNote).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls).toEqual([[2000], [4000]]);
   });
 });
