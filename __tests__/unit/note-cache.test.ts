@@ -326,6 +326,37 @@ describe("NoteCache.ensureFresh", () => {
     expect(getSyncState).toHaveBeenCalledTimes(3);
   });
 
+  it("clears entries cached before the cursor was known when finally seeding", async () => {
+    let now = 1000;
+    let mode: "fail" | "ok" = "fail";
+    const getSyncState = jest.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("network blip"); // transient (no errorCode) → swallowed
+      }
+      return { updateCount: 50 };
+    });
+    const getFilteredSyncChunk = jest.fn();
+    const api = { getSyncState, getFilteredSyncChunk } as any;
+    const cache = new NoteCache({
+      maxEntries: 10,
+      syncTtlMs: 30000,
+      now: () => now,
+    });
+
+    // First probe fails: lastUpdateCount stays null, but a read still caches a body.
+    await cache.ensureFresh(api);
+    cache.set("a", note("a", 40), false);
+    expect(cache.get("a", false)).toBeTruthy();
+
+    // Next probe succeeds and seeds the cursor — the entry cached during the
+    // unknown-cursor window can't be reconciled, so it's dropped, not kept.
+    now += 30000;
+    mode = "ok";
+    await cache.ensureFresh(api);
+    expect(cache.get("a", false)).toBeUndefined();
+    expect(getFilteredSyncChunk).not.toHaveBeenCalled();
+  });
+
   it("clears the cache when the chunk walk fails", async () => {
     let now = 1000;
     let updateCount = 50;

@@ -274,7 +274,14 @@ export class NoteCache {
     }
 
     if (this.lastUpdateCount === null) {
-      // First observation seeds the cursor; a cold cache has nothing to evict.
+      // First successful probe establishes the cursor. Any entries already held
+      // were cached while the cursor was unknown (an earlier probe failed, yet
+      // reads still stored bodies) — there's no baseline to reconcile them
+      // against, so an external edit in that window would be missed. Drop them;
+      // a genuinely cold cache is empty and this is a no-op.
+      if (this.map.size > 0) {
+        this.clear("seeding cursor after an earlier probe failure");
+      }
       this.lastUpdateCount = updateCount;
       return;
     }
