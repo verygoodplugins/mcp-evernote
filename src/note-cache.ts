@@ -105,7 +105,10 @@ export class NoteCache {
 
   // `null` until the first successful sync probe seeds the cursor.
   private lastUpdateCount: number | null = null;
+  // When we last *attempted* a probe (gates probe frequency) vs. when a probe
+  // last *succeeded* (bounds how long hits stay trustworthy).
   private lastSyncCheckAt = 0;
+  private lastVerifiedAt = 0;
   private refreshInFlight: Promise<void> | null = null;
 
   private hits = 0;
@@ -141,6 +144,20 @@ export class NoteCache {
       size: this.map.size,
       evictions: this.evictions,
     };
+  }
+
+  /**
+   * True only when a freshness probe verified the cache against the server
+   * within the sync TTL. The read-through layer serves hits only while this
+   * holds, so a run of failed probes (rate limit / network) can't keep serving
+   * bodies past the advertised staleness bound — reads fall through to the API
+   * instead of trusting an unverifiable cache.
+   */
+  isFresh(): boolean {
+    return (
+      this.lastVerifiedAt !== 0 &&
+      this.now() - this.lastVerifiedAt <= this.syncTtlMs
+    );
   }
 
   /**
@@ -263,6 +280,9 @@ export class NoteCache {
     try {
       const state = await syncApi.getSyncState();
       updateCount = state.updateCount;
+      // Probe succeeded: from here the seed/unchanged/walk/clear paths all leave
+      // the cache consistent with the server, so mark it verified-now.
+      this.lastVerifiedAt = this.now();
     } catch (error) {
       const { errorCode } = getEvernoteErrorMeta(error);
       if (isAuthErrorCode(errorCode)) {

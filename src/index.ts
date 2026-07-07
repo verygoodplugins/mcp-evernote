@@ -739,8 +739,7 @@ const tools: Tool[] = [
           type: "boolean",
           description:
             "Single-note mode: extract text from readable attachments — PDF text layers and Evernote OCR for images " +
-            "(default: true). When false, attachment text is not extracted and resource bodies aren't fetched; " +
-            "resource metadata (filenames, mime, size) is still included. " +
+            "(default: true). When false, attachment text is not extracted and resource bodies are not downloaded. " +
             "Ignored in batch (guids) mode, which never fetches attachment text.",
           default: true,
         },

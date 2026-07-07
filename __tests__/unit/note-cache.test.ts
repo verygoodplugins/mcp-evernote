@@ -282,7 +282,7 @@ describe("NoteCache.ensureFresh", () => {
     expect(cache.get("a", false)).toBeUndefined();
   });
 
-  it("serves the existing cache when the sync probe fails", async () => {
+  it("retains entries on a transient probe failure (does not clear)", async () => {
     let now = 1000;
     let fail = false;
     const getSyncState = jest.fn(async () => {
@@ -304,10 +304,38 @@ describe("NoteCache.ensureFresh", () => {
 
     now += 30000;
     fail = true;
-    await cache.ensureFresh(api); // probe throws → keep serving
+    await cache.ensureFresh(api); // transient failure → don't clear
 
+    // The entry survives in the map (a transient blip must not wipe the cache);
+    // whether it's actually *served* is gated separately by isFresh() at the
+    // read-through layer.
     expect(cache.get("a", false)).toBeTruthy();
     expect(getFilteredSyncChunk).not.toHaveBeenCalled();
+  });
+
+  it("reports not-fresh once the last successful probe is older than the TTL", async () => {
+    let now = 1000;
+    let mode: "ok" | "fail" = "ok";
+    const getSyncState = jest.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("network"); // transient
+      }
+      return { updateCount: 5 };
+    });
+    const api = { getSyncState, getFilteredSyncChunk: jest.fn() } as any;
+    const cache = new NoteCache({
+      maxEntries: 10,
+      syncTtlMs: 30000,
+      now: () => now,
+    });
+
+    await cache.ensureFresh(api); // probe ok → verified at 1000
+    expect(cache.isFresh()).toBe(true);
+
+    mode = "fail";
+    now += 60000; // 60s later, well past the 30s TTL
+    await cache.ensureFresh(api); // probe fails → verified timestamp unchanged
+    expect(cache.isFresh()).toBe(false);
   });
 
   it("rethrows auth failures from the sync probe instead of serving stale", async () => {

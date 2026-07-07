@@ -113,12 +113,17 @@ export class EvernoteAPI {
     this.sleep = rpcLimitOptions.sleep ?? defaultSleep;
     // Gate every NoteStore RPC through a shared concurrency limiter with
     // short-wait rate-limit auto-retry (see src/concurrency.ts).
-    this.noteStore = limitNoteStoreMethods(
-      client.getNoteStore(tokens.noteStoreUrl),
-      rpcLimitOptions,
-    );
+    const rawNoteStore = client.getNoteStore(tokens.noteStoreUrl);
+    this.noteStore = limitNoteStoreMethods(rawNoteStore, rpcLimitOptions);
+    // The cache relies on getSyncState/getFilteredSyncChunk to detect external
+    // edits. Partial NoteStore implementations (some unit-test fakes, embedded
+    // callers) omit them; enabling the cache there would turn every read into a
+    // swallowed failed probe. Fall back to always calling getNote instead.
     const cache = new NoteCache(options?.noteCache ?? {});
-    this.noteCache = cache.enabled ? cache : null;
+    const hasSyncSurface =
+      typeof rawNoteStore?.getSyncState === "function" &&
+      typeof rawNoteStore?.getFilteredSyncChunk === "function";
+    this.noteCache = cache.enabled && hasSyncSurface ? cache : null;
   }
 
   /**
@@ -140,10 +145,14 @@ export class EvernoteAPI {
       return this.getNote(guid, true, withResources);
     }
     await this.noteCache.ensureFresh(this as unknown as NoteCacheSyncApi);
-    // `knownUsn` lets a caller that just read fresh metadata (search) reject a
-    // cached body that predates the version it saw, closing the window where a
-    // note is edited externally between cache time and the sync-TTL refresh.
-    const hit = this.noteCache.get(guid, withResources, opts.knownUsn);
+    // Only trust the cache while a probe verified it within the TTL; a run of
+    // failed freshness probes makes hits unverifiable, so fall through to the
+    // API rather than serve a body past the advertised staleness bound.
+    // `knownUsn` additionally lets a caller that just read fresh metadata
+    // (search) reject a cached body that predates the version it saw.
+    const hit = this.noteCache.isFresh()
+      ? this.noteCache.get(guid, withResources, opts.knownUsn)
+      : undefined;
     if (hit !== undefined) {
       return hit;
     }

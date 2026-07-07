@@ -101,6 +101,49 @@ describe("EvernoteAPI note cache", () => {
     expect(getNote).toHaveBeenCalledTimes(2);
   });
 
+  it("bypasses the cache when freshness probes fail past the TTL", async () => {
+    let now = 1000;
+    let mode: "ok" | "fail" = "ok";
+    const getNote = jest.fn(async (guid: string) => noteFixture(guid));
+    const getSyncState = jest.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("network");
+      }
+      return { updateCount: 10 };
+    });
+    const api = makeApi(
+      { getNote, getSyncState, getFilteredSyncChunk: jest.fn() },
+      () => now,
+    );
+
+    await api.getNoteCached("g1", { withResources: false }); // probe ok → caches
+    await api.getNoteCached("g1", { withResources: false }); // within TTL → hit
+    expect(getNote).toHaveBeenCalledTimes(1);
+
+    // Probes now fail; advance past the TTL so the cache can't be verified fresh.
+    mode = "fail";
+    now += 60000;
+    await api.getNoteCached("g1", { withResources: false }); // unverifiable → getNote
+    expect(getNote).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables the cache when the NoteStore lacks sync methods", async () => {
+    const getNote = jest.fn(async (guid: string) => noteFixture(guid));
+    // No getSyncState / getFilteredSyncChunk — a partial store.
+    const client = { getNoteStore: () => ({ getNote }) };
+    const api = new EvernoteAPI(
+      client as any,
+      { noteStoreUrl: "https://x/notestore" } as any,
+      { rateLimitAutoRetrySeconds: 0, noteCache: { maxEntries: 50 } },
+    );
+
+    await api.getNoteCached("g1", { withResources: false });
+    await api.getNoteCached("g1", { withResources: false });
+
+    // Cache disabled → every read hits getNote (and no getSyncState call is made).
+    expect(getNote).toHaveBeenCalledTimes(2);
+  });
+
   it("re-fetches a stripped PDF resource body during extraction (cache-hit path)", async () => {
     // On a cache hit the resource body is stripped, so the single-note handler
     // passes a body-less PDF resource as `prefetched`. Extraction must re-fetch
