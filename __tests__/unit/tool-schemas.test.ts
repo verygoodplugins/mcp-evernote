@@ -4,6 +4,7 @@
 import {
   CreateNoteSchema,
   SearchNotesSchema,
+  GetNoteSchema,
   UpdateNoteSchema,
   DeleteNoteSchema,
   PatchNoteSchema,
@@ -59,6 +60,24 @@ describe('tool schemas (M1)', () => {
     it('defaults includePreview to false', () => {
       const result = SearchNotesSchema.parse({ query: 'test' });
       expect(result.includePreview).toBe(false);
+    });
+  });
+
+  describe('GetNoteSchema', () => {
+    it('defaults attachment text extraction to true', () => {
+      const result = GetNoteSchema.parse({ guid: 'abc-123' });
+      expect(result.includeAttachmentText).toBe(true);
+    });
+
+    it('accepts the legacy includePdfContent flag', () => {
+      const result = GetNoteSchema.parse({ guid: 'abc-123', includePdfContent: false });
+      expect(result.includePdfContent).toBe(false);
+      expect(result.includeAttachmentText).toBe(false);
+    });
+
+    it('accepts the generic includeAttachmentText flag', () => {
+      const result = GetNoteSchema.parse({ guid: 'abc-123', includeAttachmentText: false });
+      expect(result.includeAttachmentText).toBe(false);
     });
   });
 
