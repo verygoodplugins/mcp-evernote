@@ -1,8 +1,9 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { silenceEvernoteStdio } from "../../src/silence-evernote-stdio.js";
 
-// evernote ships CJS; Jest/ts-jest can require it directly.
+// CJS silence module + Evernote transport (package-local require, not cwd/argv).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { silenceEvernoteStdio } = require("../../src/silence-evernote-stdio.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const BinaryHttpTransport = require("evernote/lib/thrift/transport/binaryHttpTransport.js");
 
@@ -59,7 +60,19 @@ describe("silenceEvernoteStdio", () => {
     const silenceCall = source.indexOf("silenceEvernoteStdio()");
     const dotenvConfig = source.indexOf("config({ quiet: true })");
 
+    expect(source).toContain('"./silence-evernote-stdio.cjs"');
     expect(silenceCall).toBeGreaterThanOrEqual(0);
     expect(dotenvConfig).toBeGreaterThan(silenceCall);
+  });
+
+  it("loads the transport via a package-local CJS shim", () => {
+    const shim = readFileSync(
+      resolve(__dirname, "../../src/silence-evernote-stdio.cjs"),
+      "utf-8",
+    );
+    // Strip comments before asserting we never resolve via cwd/argv.
+    const code = shim.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).toContain("./evernote-binary-http-transport.cjs");
+    expect(code).not.toMatch(/process\.cwd|process\.argv/);
   });
 });

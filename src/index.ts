@@ -7,8 +7,8 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { config } from "dotenv";
+import { createRequire } from "module";
 import { ZodError } from "zod";
-import { silenceEvernoteStdio } from "./silence-evernote-stdio.js";
 import { EvernoteOAuth } from "./oauth.js";
 import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
@@ -39,6 +39,11 @@ import {
   buildWebhookPayload,
   checkForPollingChanges,
 } from "./polling.js";
+
+// CJS shim: package-local require (not cwd/argv) so global bin installs work.
+const { silenceEvernoteStdio } = createRequire(import.meta.url)(
+  "./silence-evernote-stdio.cjs",
+) as { silenceEvernoteStdio: () => void };
 
 // Redirect Evernote Thrift transport errors to stderr before any RPC runs.
 // The SDK's BinaryHttpTransport.log uses console.log, which corrupts MCP stdio.
