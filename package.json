@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "tsc && npm run postbuild",
-    "postbuild": "chmod +x dist/index.js dist/auth-standalone.js",
+    "postbuild": "chmod +x dist/index.js dist/auth-standalone.js && cp src/evernote-binary-http-transport.cjs src/silence-evernote-stdio.cjs dist/",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "setup": "node scripts/setup.js",
