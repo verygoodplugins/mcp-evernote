@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.3...mcp-evernote-v2.0.0) (2026-07-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* get_resource now defaults to text extraction, not binary download; pass as:"binary" (or deprecated includeData:true) for base64. evernote_get_resource_text, evernote_get_resource_recognition, and evernote_list_note_resources are removed from the default surface (still callable as deprecated aliases; EVERNOTE_LEGACY_TOOLS=true re-lists them).
+* **notes:** minimum supported Node.js is now 20.16.0 (was 18.18.0), required by the pdf-parse dependency.
+
+### Features
+
+* **api:** rate-limit aware NoteStore transport ([#58](https://github.com/verygoodplugins/mcp-evernote/issues/58)) ([e58d66e](https://github.com/verygoodplugins/mcp-evernote/commit/e58d66e32136f5892380233dc1e14fd2ad0a3f62))
+* consolidate MCP tool surface (27 → 15) behind backward-compatible aliases ([#62](https://github.com/verygoodplugins/mcp-evernote/issues/62)) ([d5a04fa](https://github.com/verygoodplugins/mcp-evernote/commit/d5a04fa4fbcfdf946673c3ed1cfbfab80cfbe200))
+* inject live notebook names into tool descriptions and add graceful fallback ([#45](https://github.com/verygoodplugins/mcp-evernote/issues/45)) ([9d0a814](https://github.com/verygoodplugins/mcp-evernote/commit/9d0a814c315fe269ec3751d6f6834106c66ef779))
+* **notes:** batch get_note, format projection, and paged search content ([#59](https://github.com/verygoodplugins/mcp-evernote/issues/59)) ([1b9a974](https://github.com/verygoodplugins/mcp-evernote/commit/1b9a974c1e5e7dd826e05eaea4ab3f5d118308c5))
+* **notes:** cache notebooks/tags, enrich get_note, surface rateLimitDuration ([#54](https://github.com/verygoodplugins/mcp-evernote/issues/54)) ([3a0272e](https://github.com/verygoodplugins/mcp-evernote/commit/3a0272e1ad1d857160e99a2bda3190e7076d443b))
+* **notes:** extract OCR text from image attachments ([#55](https://github.com/verygoodplugins/mcp-evernote/issues/55)) ([7452a51](https://github.com/verygoodplugins/mcp-evernote/commit/7452a51229786d7419b6d424dc9e0cd06e1a09a5))
+* **notes:** extract PDF attachment text via lazy-loaded pdf-parse ([#53](https://github.com/verygoodplugins/mcp-evernote/issues/53)) ([00cdd0c](https://github.com/verygoodplugins/mcp-evernote/commit/00cdd0c203373b723d40e2a7d637fef1f28e9db6))
+* **notes:** USN-keyed note body cache ([#60](https://github.com/verygoodplugins/mcp-evernote/issues/60)) ([2c79e2b](https://github.com/verygoodplugins/mcp-evernote/commit/2c79e2b669401b9b56d57a28305c6c67d920b7df))
+
+
+### Bug Fixes
+
+* **polling:** use filtered Evernote sync chunks ([#37](https://github.com/verygoodplugins/mcp-evernote/issues/37)) ([46c4ec7](https://github.com/verygoodplugins/mcp-evernote/commit/46c4ec7511559629cb4070cf6e68ae81d1c3664e))
+* resolve noteStoreUrl via getUserUrls() instead of non-existent getNoteStoreUrl() ([#42](https://github.com/verygoodplugins/mcp-evernote/issues/42)) ([c696ecb](https://github.com/verygoodplugins/mcp-evernote/commit/c696ecbaae6dc4cd46e4b45468602cbd0a492d31))
+* **stdio:** keep Evernote Thrift errors off MCP stdout ([#64](https://github.com/verygoodplugins/mcp-evernote/issues/64)) ([c3aeec9](https://github.com/verygoodplugins/mcp-evernote/commit/c3aeec97849323b64e61cd374f77e183fd202f2e))
+
 ## [1.2.3](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.2...mcp-evernote-v1.2.3) (2026-01-21)
 
 
