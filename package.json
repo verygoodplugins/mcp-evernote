@@ -56,14 +56,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "cheerio": "1.1.0",
+    "cheerio": "1.2.0",
     "dotenv": "^17.4.2",
     "evernote": "^2.0.5",
     "express": "^5.2.1",
-    "marked": "^12.0.2",
+    "marked": "^18.0.7",
     "mime-types": "^3.0.2",
     "node-fetch": "^3.3.2",
-    "open": "^10.2.0",
+    "open": "^11.0.0",
     "pdf-parse": "^2.4.5",
     "sanitize-html": "^2.17.3",
     "turndown": "^7.2.0",
@@ -92,22 +92,22 @@
     }
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
+    "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/mime-types": "^3.0.1",
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.1.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/sanitize-html": "^2.13.0",
     "@types/turndown": "^5.0.5",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
     "audit-ci": "^7.1.0",
-    "eslint": "^9.39.4",
+    "eslint": "^10.7.0",
     "jest": "^30.4.2",
     "prettier": "^3.1.0",
     "ts-jest": "^29.4.5",
     "tsx": "^4.6.0",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   }
 }
