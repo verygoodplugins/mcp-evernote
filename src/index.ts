@@ -2541,6 +2541,8 @@ process.on("uncaughtException", (error: Error) => {
 
 // Start server
 async function main() {
+  // Capture before any await — process.ppid is dynamic.
+  const parentPid = process.ppid;
   console.error("Starting Evernote MCP server...");
   console.error(`Environment: ${ENVIRONMENT}`);
   console.error(
@@ -2555,6 +2557,7 @@ async function main() {
     transport,
     onCloseAssignable: server,
     envName: "EVERNOTE_PARENT_WATCHDOG_MS",
+    parentPid,
     onShutdown: () => {
       stopPolling();
     },

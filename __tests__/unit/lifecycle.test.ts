@@ -1,5 +1,6 @@
 import {
   DEFAULT_PARENT_WATCHDOG_MS,
+  installStdioLifecycle,
   parseWatchdogIntervalMs,
   startParentWatchdog,
 } from '../../src/lifecycle.js';
@@ -30,5 +31,30 @@ describe('startParentWatchdog', () => {
     jest.advanceTimersByTime(500);
     expect(onDead).toHaveBeenCalledTimes(1);
     jest.useRealTimers();
+  });
+});
+
+describe('installStdioLifecycle soft stdin EOF', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('does not close transport or exit on stdin end/close', () => {
+    const transport = { close: jest.fn() };
+    const exitSpy = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    installStdioLifecycle({
+      transport,
+      parentPid: process.ppid,
+      envName: 'EVERNOTE_PARENT_WATCHDOG_MS',
+    });
+
+    process.stdin.emit('end');
+    process.stdin.emit('close');
+
+    expect(transport.close).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 });
