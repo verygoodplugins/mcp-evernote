@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { installStdioLifecycle } from "./lifecycle.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -2550,6 +2551,14 @@ async function main() {
   }
 
   const transport = new StdioServerTransport();
+  installStdioLifecycle({
+    transport,
+    onCloseAssignable: server,
+    envName: "EVERNOTE_PARENT_WATCHDOG_MS",
+    onShutdown: () => {
+      stopPolling();
+    },
+  });
   await server.connect(transport);
   console.error("Evernote MCP server running on stdio");
 
