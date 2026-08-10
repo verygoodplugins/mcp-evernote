@@ -13,10 +13,7 @@
           "path": "server.json",
           "jsonpath": "$.packages[0].version"
         },
-        {
-          "type": "generic",
-          "path": "src/index.ts"
-        }
+        "src/index.ts"
       ]
     }
   }
