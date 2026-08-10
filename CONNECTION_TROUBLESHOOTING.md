@@ -30,7 +30,7 @@ The MCP Evernote server can encounter "Not connected" errors for several reasons
 
 ## The Fix: Automatic Recovery
 
-### What Changed in v1.2.0
+### What Changed
 
 #### 1. **Automatic Retry with Backoff**
 
@@ -76,7 +76,7 @@ async validateToken(tokens: OAuthTokens): Promise<boolean> {
 #### 3. **Force Reconnection Tool**
 
 ```typescript
-// New tool: evernote_reconnect
+// Tool: evernote_connection({ action: "reconnect" })
 // Forces complete reinitialization of API client
 await ensureAPI(true); // forceReinit = true
 ```
@@ -141,7 +141,7 @@ In Claude:
 Try reconnecting to Evernote
 ```
 
-This will trigger the `evernote_reconnect` tool which forces reinitialization.
+This will trigger `evernote_connection({ action: "reconnect" })`, which forces reinitialization.
 
 #### Option 2: Check Token Status
 
@@ -149,7 +149,7 @@ This will trigger the `evernote_reconnect` tool which forces reinitialization.
 Check Evernote health status with verbose details
 ```
 
-This runs `evernote_health_check` with `verbose: true` to show:
+This runs `evernote_connection({ action: "status" })` with `verbose: true` to show:
 - Token file status
 - Expiration time
 - Last error details
@@ -199,7 +199,7 @@ This allows you to:
 
 If running the server in production, periodically call:
 ```typescript
-evernote_health_check({ verbose: true })
+evernote_connection({ action: "status", verbose: true })
 ```
 
 Monitor for:
@@ -213,7 +213,7 @@ Monitor for:
 
 **Meaning**: The server tried to connect but failed. It's in cooldown period.
 
-**Action**: Wait for the retry delay to expire, or call `evernote_reconnect` to force immediate retry.
+**Action**: Wait for the retry delay to expire, or call `evernote_connection({ action: "reconnect" })` to force immediate retry.
 
 ### "Not connected: Authentication required. Token may be expired or invalid."
 
@@ -338,7 +338,7 @@ echo "invalid json" > .evernote-token.json
 - Spam logs with errors
 - Waste API calls
 
-You can override this with `evernote_reconnect` for immediate retry.
+You can override this with `evernote_connection({ action: "reconnect" })` for immediate retry.
 
 ### Q: Will the server crash if Evernote is down?
 
@@ -363,7 +363,7 @@ Simply retry and it should work (if you've re-authenticated).
 
 ### Q: Should I use the reconnect tool or restart the server?
 
-**A**: Use `evernote_reconnect` first. It's faster and preserves logs. Only restart if:
+**A**: Use `evernote_connection({ action: "reconnect" })` first. It's faster and preserves logs. Only restart if:
 - Reconnect tool fails repeatedly
 - You suspect code-level issues
 - You've updated the server code
@@ -384,7 +384,7 @@ Implement periodic health checks:
 ```typescript
 // Every 5 minutes
 setInterval(async () => {
-  const health = await evernote_health_check({ verbose: true });
+  const health = await evernote_connection({ action: "status", verbose: true });
   
   if (health.status !== 'healthy') {
     // Alert or log
@@ -392,7 +392,7 @@ setInterval(async () => {
     
     // Try reconnect
     if (health.authentication?.status === 'not_authenticated') {
-      await evernote_reconnect();
+      await evernote_connection({ action: "reconnect" });
     }
   }
 }, 300000);
@@ -415,7 +415,7 @@ If issues persist after these fixes:
    DEBUG=* npm start
    
    # Check health
-   evernote_health_check({ verbose: true })
+   evernote_connection({ action: "status", verbose: true })
    ```
 
 2. **Check logs for**:
@@ -431,7 +431,7 @@ If issues persist after these fixes:
 
 ## Summary
 
-The v1.2.0 update transforms the MCP Evernote server from brittle (manual restart required) to resilient (automatic recovery). The changes ensure:
+Connection resilience transforms the MCP Evernote server from brittle (manual restart required) to resilient (automatic recovery). The changes ensure:
 
 ✅ **Automatic recovery** from 90% of connection issues  
 ✅ **Clear error messages** with actionable steps  

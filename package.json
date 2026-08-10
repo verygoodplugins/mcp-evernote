@@ -12,6 +12,15 @@
     "mcp-evernote": "dist/index.js",
     "mcp-evernote-auth": "dist/auth-standalone.js"
   },
+  "files": [
+    "dist",
+    "scripts",
+    "server.json",
+    "README.md",
+    "MIGRATION.md",
+    "CONNECTION_TROUBLESHOOTING.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc && npm run postbuild",
     "postbuild": "chmod +x dist/index.js dist/auth-standalone.js && cp src/evernote-binary-http-transport.cjs src/silence-evernote-stdio.cjs dist/",

@@ -622,7 +622,7 @@ function getPollingStatus(): any {
 const server = new Server(
   {
     name: "mcp-evernote",
-    version: "1.2.0",
+    version: "2.0.0", // x-release-please-version
   },
   {
     capabilities: {
@@ -1336,7 +1336,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const healthStatus: any = {
           server: {
             name: "mcp-evernote",
-            version: "1.2.3",
+            version: "2.0.0", // x-release-please-version
             status: "running",
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
