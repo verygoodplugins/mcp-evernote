@@ -40,6 +40,13 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          # Must NOT be the default GITHUB_TOKEN. GitHub suppresses workflow
+          # triggers for events authored by GITHUB_TOKEN, so a release PR
+          # created with it never runs ci.yml — the required `test` status
+          # check never appears and the PR is permanently unmergeable.
+          # (A push/pull_request trigger on release-please--* does not help;
+          # only workflow_dispatch and repository_dispatch escape that rule.)
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

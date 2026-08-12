@@ -12,7 +12,8 @@
           "type": "json",
           "path": "server.json",
           "jsonpath": "$.packages[0].version"
-        }
+        },
+        "src/index.ts"
       ]
     }
   }

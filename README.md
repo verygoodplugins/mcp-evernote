@@ -11,6 +11,19 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 
 ## Installation Requirements
 
+### Node.js
+
+**Node.js 20.16.0 or newer is required.** The PDF attachment extraction path
+(`pdf-parse`, and its `pdfjs-dist` transitive dependency) does not run on older
+releases. Check with `node --version`; if you are on Node 18, upgrade before
+installing.
+
+> **Upgrading from 1.x?** 2.0.0 raises the Node floor from 18.18.0 and changes
+> `evernote_get_resource` to return extracted text by default instead of binary
+> data. The tool surface was also consolidated from 27 tools to 15 — the retired
+> names still work as deprecated aliases, so existing calls keep running. See
+> [MIGRATION.md](MIGRATION.md).
+
 ### For Claude Desktop Users:
 - **OAuth Authentication Required**: Yes, run the auth command once (prompts for API keys)
 - **Repository Download**: No, you can use npx directly from npm
@@ -479,6 +492,14 @@ Create a new notebook.
 - `name` (required): Notebook name
 - `stack` (optional): Stack name for organization
 
+#### `evernote_update_notebook`
+Rename a notebook or move it between stacks.
+
+**Parameters:**
+- `guid` (required): Notebook GUID
+- `name` (optional): New notebook name
+- `stack` (optional): Stack name — pass an empty string to remove it from its stack
+
 ### Tag Operations
 
 #### `evernote_list_tags`
@@ -491,6 +512,51 @@ Create a new tag.
 **Parameters:**
 - `name` (required): Tag name
 - `parentTagName` (optional): Parent tag for hierarchy
+
+#### `evernote_update_tag`
+Rename a tag or re-parent it.
+
+**Parameters:**
+- `guid` (required): Tag GUID
+- `name` (optional): New tag name
+- `parentTagName` (optional): Parent tag name — pass an empty string to remove the parent
+
+### Attachments & Resources
+
+#### `evernote_get_resource`
+Read one attachment, projected through one of four views.
+
+> **⚠️ Breaking change in 2.0.0.** This tool used to return base64 binary data by
+> default. It now returns **extracted text** by default. Pass `as: "binary"` to
+> get the old behavior.
+
+**Parameters:**
+- `guid` (required): Resource GUID (from a note's `resources[]`, via `evernote_get_note`)
+- `as` (optional, default `"text"`): How to project the attachment
+  - `"text"` — extracted text. PDFs go through the text layer, falling back to
+    Evernote's OCR data for scanned documents; images use OCR.
+  - `"binary"` — base64-encoded file body.
+  - `"recognition"` — raw Evernote OCR recognition data.
+  - `"metadata"` — filename, MIME type, size, hash, and `hasRecognition`.
+- `includeData` (optional, **deprecated**): `true` maps to `as:"binary"`, `false` to `as:"metadata"`.
+
+There is no separate tool to list a note's attachments — `evernote_get_note`
+returns them in `resources[]`.
+
+**Example:**
+```
+Get the text of the PDF attached to that invoice note
+```
+
+#### `evernote_add_resource_to_note`
+Attach a local file to an existing note.
+
+**Parameters:**
+- `noteGuid` (required): Target note GUID
+- `filePath` (required): Path to the local file. Must sit under an allowed root —
+  see `EVERNOTE_ALLOWED_FILE_ROOTS` (defaults to your home directory and the
+  current working directory).
+- `filename` (optional): Override the attachment's display name
 
 ### Connection & Account
 
@@ -578,7 +644,7 @@ MCP_MEMORY_SERVICE_URL=http://localhost:8765
 Sync my "Important Concepts" notebook to memory for long-term retention
 ```
 
-## Connection Resilience (v1.2.0+)
+## Connection Resilience
 
 The server includes automatic recovery from connection issues:
 
@@ -701,7 +767,7 @@ Contributions are welcome! Please:
 2. Create a feature branch
 3. Make your changes
 4. Add tests if applicable
-5. Submit a pull request (target `develop`; `main` is kept stable for Railway template deployments)
+5. Submit a pull request against `main`
 
 ## License
 
