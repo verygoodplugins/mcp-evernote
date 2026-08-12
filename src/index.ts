@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { installStdioLifecycle } from "./lifecycle.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -2540,6 +2541,8 @@ process.on("uncaughtException", (error: Error) => {
 
 // Start server
 async function main() {
+  // Capture before any await — process.ppid is dynamic.
+  const parentPid = process.ppid;
   console.error("Starting Evernote MCP server...");
   console.error(`Environment: ${ENVIRONMENT}`);
   console.error(
@@ -2550,6 +2553,15 @@ async function main() {
   }
 
   const transport = new StdioServerTransport();
+  installStdioLifecycle({
+    transport,
+    onCloseAssignable: server,
+    envName: "EVERNOTE_PARENT_WATCHDOG_MS",
+    parentPid,
+    onShutdown: () => {
+      stopPolling();
+    },
+  });
   await server.connect(transport);
   console.error("Evernote MCP server running on stdio");
 
