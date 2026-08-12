@@ -47,7 +47,7 @@ npm run test:e2e          # __tests__/e2e
 npm run test:coverage     # with coverage
 ```
 
-All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=20.16.0` is required (`package.json` `engines`) — the `pdf-parse` dependency (and its `pdfjs-dist` transitive) require Node 20.16+.
+All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=20.16.0 <21 || >=22.3.0` is required (`package.json` `engines`) — this mirrors the disjoint range `pdf-parse` (and its `pdfjs-dist` transitive) declares, so Node 21.x and 22.0–22.2 are excluded. `__tests__/unit/engine-range.test.ts` fails if the two drift apart.
 
 ## Architecture
 

@@ -13,12 +13,17 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 
 ### Node.js
 
-**Node.js 20.16.0 or newer is required.** The PDF attachment extraction path
-(`pdf-parse`, and its `pdfjs-dist` transitive dependency) does not run on older
-releases. Check with `node --version`; if you are on Node 18, upgrade before
-installing.
+**Supported Node.js: `>=20.16.0 <21` or `>=22.3.0`.** In practice that means
+Node 20.16+, 22.3+, 24, or newer — the two gaps are Node 21.x and Node
+22.0–22.2. This is not an arbitrary floor: it mirrors the `engines` range that
+the PDF attachment extraction path (`pdf-parse`, and its `pdfjs-dist`
+transitive dependency) actually declares, and the range is genuinely disjoint.
 
-> **Upgrading from 1.x?** 2.0.0 raises the Node floor from 18.18.0 and changes
+Check with `node --version`. On Node 18 or 21, or on 22.0–22.2, upgrade before
+installing — Node 21 reached end-of-life in June 2024, and 22.3+ supersedes the
+early 22 patches.
+
+> **Upgrading from 1.x?** 2.0.0 raises the Node requirement from 18.18.0 and changes
 > `evernote_get_resource` to return extracted text by default instead of binary
 > data. The tool surface was also consolidated from 27 tools to 15 — the retired
 > names still work as deprecated aliases, so existing calls keep running. See
