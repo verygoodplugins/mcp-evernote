@@ -39,7 +39,8 @@
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
     "prepublishOnly": "npm run build",
-    "postinstall": "node scripts/post-install.js 2>/dev/null || true"
+    "postinstall": "node scripts/post-install.js 2>/dev/null || true",
+    "test:connection": "npm run build && node --test __tests__/connection-protocol.test.mjs"
   },
   "keywords": [
     "mcp",
