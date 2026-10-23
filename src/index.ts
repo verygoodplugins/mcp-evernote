@@ -16,7 +16,11 @@ import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
 import { resolveToolAlias } from "./tool-aliases.js";
 import { computeWebhookSignature } from "./webhook.js";
-import { buildToolErrorPayload, getEvernoteErrorMeta } from "./errors.js";
+import {
+  buildToolErrorPayload,
+  getEvernoteErrorMeta,
+  isAuthErrorCode,
+} from "./errors.js";
 import {
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
@@ -1308,7 +1312,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (action === "reconnect") {
         console.error("Force reconnect requested");
         try {
-          await ensureAPI(true); // Force reinitialization
+          const connectedApi = await ensureAPI(true);
+          await connectedApi.getUser(); // Verify credentials with Evernote before claiming success.
           return {
             content: [
               {
@@ -1322,9 +1327,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `❌ Reconnection failed: ${error.message}\n\nYou may need to re-authenticate. Run "npm run auth" or use the /mcp command in Claude Code.`,
+                text: JSON.stringify(
+                  buildToolErrorPayload(name, error),
+                  null,
+                  2,
+                ),
               },
             ],
+            isError: true,
           };
         }
       }
@@ -1403,8 +1413,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               healthStatus.status = "healthy";
             } catch (e) {
               healthStatus.authentication.status = "api_error";
-              healthStatus.authentication.apiError = (e as Error).message;
-              healthStatus.status = "unhealthy";
+              const failure = buildToolErrorPayload(name, e);
+              healthStatus.authentication.apiError = failure.message;
+              healthStatus.authentication.errorCode = failure.errorCode;
+              healthStatus.authentication.errorName = failure.errorName;
+              healthStatus.status = isAuthErrorCode(failure.errorCode)
+                ? "needs_auth"
+                : "unhealthy";
             }
           } else {
             try {
@@ -1420,7 +1435,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   username: user.username,
                 };
               } catch (e) {
-                healthStatus.authentication.apiError = (e as Error).message;
+                const failure = buildToolErrorPayload(name, e);
+                healthStatus.authentication.status = "api_error";
+                healthStatus.authentication.apiError = failure.message;
+                healthStatus.authentication.errorCode = failure.errorCode;
+                healthStatus.authentication.errorName = failure.errorName;
+                healthStatus.status = isAuthErrorCode(failure.errorCode)
+                  ? "needs_auth"
+                  : "unhealthy";
               }
             } catch (e) {
               healthStatus.authentication.status = "not_authenticated";
@@ -2455,7 +2477,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error: any) {
-    // Check if it's an authentication error that we can retry
+    // Rebuilding a client cannot renew credentials rejected by Evernote.
+    const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
     const isAuthError =
       error.message?.includes("Not connected") ||
       error.message?.includes("Authentication required") ||
@@ -2466,6 +2489,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // If auth error and haven't retried yet, try once with forced reinit
     if (
       isAuthError &&
+      !isAuthErrorCode(errorCode) &&
+      name !== "evernote_connection" &&
       name !== "evernote_reconnect" &&
       name !== "evernote_health_check"
     ) {
@@ -2478,7 +2503,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Verify reconnection succeeded
         console.error(`Verifying reconnection after ${name} failure...`);
-        await ensureAPI();
+        const connectedApi = await ensureAPI();
+        await connectedApi.getUser();
 
         // Execute the same operation again (simplified - real implementation would need to rerun the switch)
         // For now, just inform user to retry
@@ -2488,7 +2514,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: "text",
               text:
                 `⚠️ Connection was lost but has been restored.\n\n` +
-                `Original error: ${error.message}\n\n` +
+                `Original error: ${buildToolErrorPayload(name, error).message}\n\n` +
                 `Please retry your operation.`,
             },
           ],
@@ -2499,7 +2525,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
     const payload = buildToolErrorPayload(name, error);
 
     console.error(
