@@ -47,7 +47,7 @@ npm run test:e2e          # __tests__/e2e
 npm run test:coverage     # with coverage
 ```
 
-All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=20.16.0 <21 || >=22.3.0` is required (`package.json` `engines`) — this mirrors the disjoint range `pdf-parse` (and its `pdfjs-dist` transitive) declares, so Node 21.x and 22.0–22.2 are excluded. `__tests__/unit/engine-range.test.ts` fails if the two drift apart.
+All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=20.16.0 <21 || >=22.3.0` is required (`package.json` `engines`) — this mirrors the disjoint range `pdf-parse` (and its `pdfjs-dist` transitive) declares, so Node 21.x and 22.0–22.2 are excluded. `__tests__/unit/engine-range.test.ts` fails if the two drift apart. `sanitize-html` is pinned to exactly `2.17.5`: 2.17.6+ needs ESM-only `htmlparser2` and Node `>=22.12.0`, which breaks Jest (CJS) and the Node 20.16 floor. `__tests__/unit/dependency-engines.test.ts` fails if any runtime dependency's `engines.node` stops covering our range, and `.github/dependabot.yml` ignores `sanitize-html >=2.17.6` — lift the pin only together with an `engines` bump and a Jest ESM migration.
 
 ## Architecture
 
