@@ -75,7 +75,7 @@
     "node-fetch": "^3.3.2",
     "open": "^10.2.0",
     "pdf-parse": "^2.4.5",
-    "sanitize-html": "^2.17.3",
+    "sanitize-html": "2.17.5",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2",
     "zod": "^4.4.3"
@@ -88,7 +88,7 @@
         "ajv": "^8.18.0"
       }
     },
-    "hono": "^4.12.28",
+    "hono": "^4.13.14",
     "qs": "^6.14.2",
     "sanitize-html": {
       "postcss": "^8.5.13"
