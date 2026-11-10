@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 2
+    ignore:
+      # sanitize-html 2.17.6+ requires ESM-only htmlparser2 and node >=22.12.0,
+      # which breaks Jest (CJS) and the Node 20.16 floor in package.json engines.
+      # Revisit together with an engines bump + Jest ESM migration.
+      - dependency-name: "sanitize-html"
+        versions: [">=2.17.6"]
     groups:
       npm-version-updates:
         applies-to: version-updates
