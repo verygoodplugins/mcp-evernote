@@ -11,6 +11,18 @@ updates:
       # Revisit together with an engines bump + Jest ESM migration.
       - dependency-name: "sanitize-html"
         versions: [">=2.17.6"]
+      # typescript 7 violates the peer ranges of @typescript-eslint (<6.1.0) and
+      # ts-jest (<7), so `npm ci` fails with ERESOLVE. Lift once both support it.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
+      # marked 13+ passes token objects to renderer overrides (src/markdown.ts
+      # uses the positional image(href, title, text) signature) and 16+ is
+      # ESM-only, which Jest (CJS) cannot load. Needs a markdown.ts + Jest ESM migration.
+      - dependency-name: "marked"
+        versions: [">=13.0.0"]
+      # cheerio 1.1.1+ declares node >=20.18.1, above our 20.16.0 floor.
+      - dependency-name: "cheerio"
+        versions: [">=1.1.1"]
     groups:
       npm-version-updates:
         applies-to: version-updates
