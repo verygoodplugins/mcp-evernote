@@ -20,6 +20,7 @@ import {
   buildToolErrorPayload,
   getEvernoteErrorMeta,
   isAuthErrorCode,
+  RATE_LIMIT_ERROR_CODE,
 } from "./errors.js";
 import {
   DEFAULT_MAX_CONCURRENCY,
@@ -429,6 +430,14 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     getCachedNotebooks(api).catch(() => {});
     return api;
   } catch (error: any) {
+    // A rate limit during (re)connect (e.g. the shared queue's backoff
+    // rejecting noteStoreUrl discovery) is not an init failure: rethrow it
+    // untouched so buildToolErrorPayload reports rate_limited with
+    // retryAfterSeconds, and don't latch the init-retry delay.
+    if (getEvernoteErrorMeta(error).errorCode === RATE_LIMIT_ERROR_CODE) {
+      lastInitAttempt = 0;
+      throw error;
+    }
     apiInitError = error.message || "Failed to initialize Evernote API";
     console.error(`API initialization failed: ${apiInitError}`);
 
