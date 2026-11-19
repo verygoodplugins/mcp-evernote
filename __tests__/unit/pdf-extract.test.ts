@@ -1,11 +1,13 @@
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 
-jest.mock('pdf-parse', () => ({
+// ESM mocks must be registered before the modules under test are imported,
+// so the imports below are dynamic.
+jest.unstable_mockModule('pdf-parse', () => ({
   PDFParse: jest.fn(),
 }));
 
-import { PDFParse } from 'pdf-parse';
-import { extractPdfText } from '../../src/pdf-extract.js';
+const { PDFParse } = await import('pdf-parse');
+const { extractPdfText } = await import('../../src/pdf-extract.js');
 
 const MockedPDFParse = PDFParse as unknown as jest.Mock;
 const FALLBACK = '[PDF text extraction failed — may be a scanned/image-only document]';

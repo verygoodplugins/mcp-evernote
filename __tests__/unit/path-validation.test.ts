@@ -1,6 +1,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -83,9 +84,8 @@ describe('safe local file path validation', () => {
 
 describe('safe path validation is used in evernote-api.ts', () => {
   it('addResourceToNote validates before readFile', () => {
-    const { readFileSync } = require('fs');
     const source = readFileSync(
-      require('path').resolve(__dirname, '../../src/evernote-api.ts'),
+      path.resolve(import.meta.dirname, '../../src/evernote-api.ts'),
       'utf-8',
     );
 

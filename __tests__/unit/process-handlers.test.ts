@@ -9,7 +9,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 const indexSource = readFileSync(
-  resolve(__dirname, '../../src/index.ts'),
+  resolve(import.meta.dirname, '../../src/index.ts'),
   'utf-8',
 );
 
