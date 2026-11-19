@@ -2,6 +2,8 @@ import * as Evernote from 'evernote';
 import fs from 'fs/promises';
 import path from 'path';
 import { EvernoteConfig, OAuthTokens } from './types.js';
+import { EvernoteRequestQueue, queueStoreMethods } from './request-queue.js';
+import { getEvernoteErrorMeta, RATE_LIMIT_ERROR_CODE } from './errors.js';
 
 export class EvernoteOAuth {
   private config: EvernoteConfig;
@@ -162,7 +164,15 @@ export class EvernoteOAuth {
     console.error('If you use EVERNOTE_ACCESS_TOKEN, remove or update it in your MCP configuration.');
   }
 
-  async getAuthenticatedClient(): Promise<any> {
+  /**
+   * @param options.requestQueue Process-wide request queue. When given, the
+   *   UserStore noteStoreUrl discovery RPC goes through it, so reconnects honor
+   *   the same concurrency, pacing and shared rate-limit backoff as every
+   *   other Evernote call.
+   */
+  async getAuthenticatedClient(
+    options: { requestQueue?: EvernoteRequestQueue } = {},
+  ): Promise<any> {
     const tokens = await this.getAccessToken();
 
     const authenticatedClient = new Evernote.Client({
@@ -174,7 +184,10 @@ export class EvernoteOAuth {
     // If noteStoreUrl is missing, fetch from UserStore
     if (!tokens.noteStoreUrl) {
       try {
-        const userStore = authenticatedClient.getUserStore();
+        const rawUserStore = authenticatedClient.getUserStore();
+        const userStore = options.requestQueue
+          ? queueStoreMethods(rawUserStore, options.requestQueue)
+          : rawUserStore;
         // The Evernote JS SDK (evernote@2.0.5) has no getNoteStoreUrl(); use
         // getUserUrls(), and fall back to deriving from webApiUrlPrefix.
         const userUrls = await userStore.getUserUrls();
@@ -190,6 +203,11 @@ export class EvernoteOAuth {
           await fs.writeFile(this.tokenFile, JSON.stringify(tokens, null, 2));
         }
       } catch (error) {
+        // Surface rate limits (incl. a local shared-backoff rejection) as-is so
+        // callers see retryAfterSeconds instead of a misleading "token invalid".
+        if (getEvernoteErrorMeta(error).errorCode === RATE_LIMIT_ERROR_CODE) {
+          throw error;
+        }
         console.error('Failed to get noteStoreUrl from Evernote');
         throw new Error('Failed to get noteStoreUrl from Evernote. Token may be invalid.');
       }

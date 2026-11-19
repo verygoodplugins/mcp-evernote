@@ -2,6 +2,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
+  CallToolRequest,
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
@@ -19,12 +20,17 @@ import {
   buildToolErrorPayload,
   getEvernoteErrorMeta,
   isAuthErrorCode,
+  RATE_LIMIT_ERROR_CODE,
 } from "./errors.js";
 import {
   DEFAULT_MAX_CONCURRENCY,
+  DEFAULT_MIN_REQUEST_INTERVAL_MS,
   DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
+  resolveRpcLimitOptions,
   RpcLimitOptions,
 } from "./concurrency.js";
+import { EvernoteRequestQueue } from "./request-queue.js";
+import { resolveHttpConfig, startHttpServer } from "./http-server.js";
 import {
   applyCharBudget,
   DEFAULT_MAX_RESPONSE_CHARS,
@@ -107,8 +113,9 @@ const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
 // TOOL_ALIASES regardless of this flag — it only controls visibility.
 const LEGACY_TOOLS_ENABLED = process.env.EVERNOTE_LEGACY_TOOLS === "true";
 
-// NoteStore RPC transport tuning. Bounding concurrency keeps a wide fan-out
-// from bursting past Evernote's hourly rate limit; short waits auto-retry.
+// Evernote RPC queue tuning. Bounding concurrency keeps a wide fan-out from
+// bursting past Evernote's hourly rate limit; pacing spaces dispatches; short
+// rate-limit backoffs are waited out by the queue, long ones fail fast.
 const RPC_LIMIT_OPTIONS: Partial<RpcLimitOptions> = {
   maxConcurrency: parseInt(
     process.env.EVERNOTE_MAX_CONCURRENCY || String(DEFAULT_MAX_CONCURRENCY),
@@ -119,7 +126,19 @@ const RPC_LIMIT_OPTIONS: Partial<RpcLimitOptions> = {
       String(DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS),
     10,
   ),
+  minIntervalMs: parseInt(
+    process.env.EVERNOTE_MIN_REQUEST_INTERVAL_MS ||
+      String(DEFAULT_MIN_REQUEST_INTERVAL_MS),
+    10,
+  ),
 };
+
+// ONE queue for the whole process: every EvernoteAPI instance (including ones
+// rebuilt by reconnect) and every transport session (stdio or HTTP) shares it,
+// so a rate-limit backoff applies to all callers instead of each retrying alone.
+const requestQueue = new EvernoteRequestQueue(
+  resolveRpcLimitOptions(RPC_LIMIT_OPTIONS),
+);
 
 // Total content-character budget for multi-note responses, to stay under the
 // MCP response token cap. Bodies past this are dropped with `truncated: true`.
@@ -399,10 +418,11 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
 
   try {
     lastInitAttempt = now;
-    const { client, tokens } = await oauth.getAuthenticatedClient();
+    const { client, tokens } = await oauth.getAuthenticatedClient({ requestQueue });
     api = new EvernoteAPI(client, tokens, {
       ...RPC_LIMIT_OPTIONS,
       noteCache: NOTE_CACHE_OPTIONS,
+      requestQueue,
     });
     apiInitError = null;
     console.error("API initialized successfully");
@@ -410,6 +430,14 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
     getCachedNotebooks(api).catch(() => {});
     return api;
   } catch (error: any) {
+    // A rate limit during (re)connect (e.g. the shared queue's backoff
+    // rejecting noteStoreUrl discovery) is not an init failure: rethrow it
+    // untouched so buildToolErrorPayload reports rate_limited with
+    // retryAfterSeconds, and don't latch the init-retry delay.
+    if (getEvernoteErrorMeta(error).errorCode === RATE_LIMIT_ERROR_CODE) {
+      lastInitAttempt = 0;
+      throw error;
+    }
     apiInitError = error.message || "Failed to initialize Evernote API";
     console.error(`API initialization failed: ${apiInitError}`);
 
@@ -621,19 +649,6 @@ function getPollingStatus(): any {
 // ============================================================================
 // MCP Server
 // ============================================================================
-
-// Create MCP server
-const server = new Server(
-  {
-    name: "mcp-evernote",
-    version: "2.0.0", // x-release-please-version
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  },
-);
 
 // Define tool schemas
 const tools: Tool[] = [
@@ -1207,7 +1222,7 @@ const legacyTools: Tool[] = [
   },
 ];
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+async function handleListTools() {
   notebookCache = await resolveNotebookCacheForToolDescriptions({
     currentCache: notebookCache,
     currentApi: api,
@@ -1218,7 +1233,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
   const advertised = LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools;
   return { tools: enrichToolsWithNotebookDescriptions(advertised, notebookCache) };
-});
+}
 
 // Retired tool names stay callable via TOOL_ALIASES; warn once per alias so a
 // long-lived server doesn't spam its log. stderr only — stdout is the MCP channel.
@@ -1233,7 +1248,7 @@ function warnDeprecatedAlias(oldName: string, canonical: string): void {
 }
 
 // Call tool handler
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+async function handleCallTool(request: CallToolRequest): Promise<any> {
   // Resolve a possibly-retired tool name to its canonical form BEFORE
   // validation, so aliased calls validate against — and route to — the
   // canonical handler. Non-aliased names pass through unchanged.
@@ -1362,6 +1377,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             apiInitialized: !!api,
             lastError: apiInitError,
           },
+          // Shared Evernote request queue: depth, wait times, backoff state.
+          queue: requestQueue.getMetrics(),
         };
 
         try {
@@ -2545,7 +2562,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+}
+
+/**
+ * Build an MCP server bound to the shared tool registry and handlers. stdio
+ * creates one; HTTP creates one per session (an SDK `Server` can only be
+ * connected to a single transport). All of them share the module-level
+ * Evernote client, caches, and request queue.
+ */
+export function createEvernoteServer(): Server {
+  const server = new Server(
+    {
+      name: "mcp-evernote",
+      version: "2.0.0", // x-release-please-version
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    },
+  );
+  server.setRequestHandler(ListToolsRequestSchema, handleListTools);
+  server.setRequestHandler(CallToolRequestSchema, handleCallTool);
+  return server;
+}
 
 // Handle unhandled rejections - log and exit
 process.on("unhandledRejection", (reason: any) => {
@@ -2563,8 +2603,56 @@ process.on("uncaughtException", (error: Error) => {
   setTimeout(() => process.exit(1), 1000);
 });
 
+/**
+ * stdio (default) or Streamable HTTP. HTTP is selected with `--http` or
+ * `EVERNOTE_TRANSPORT=http`. Deliberately not MCP_TRANSPORT: oauth.ts treats
+ * that variable as the Claude Code detection flag.
+ */
+function resolveTransportMode(): "stdio" | "http" {
+  if (process.argv.includes("--http")) {
+    return "http";
+  }
+  return process.env.EVERNOTE_TRANSPORT?.toLowerCase() === "http"
+    ? "http"
+    : "stdio";
+}
+
+async function startHttpMode(): Promise<void> {
+  const httpConfig = resolveHttpConfig(process.env);
+  const running = await startHttpServer({
+    ...httpConfig,
+    createServer: createEvernoteServer,
+    getMetrics: () => requestQueue.getMetrics(),
+  });
+  console.error(`Evernote MCP server listening on ${running.url}`);
+  console.error(
+    httpConfig.allowUnauthenticated
+      ? "Auth: DISABLED (loopback only, EVERNOTE_HTTP_ALLOW_UNAUTHENTICATED=true)"
+      : `Auth: ${httpConfig.callerKeys.length} caller key(s)`,
+  );
+
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stopPolling();
+    // Don't hang forever on a stuck connection.
+    setTimeout(() => process.exit(0), 5000).unref();
+    running
+      .close()
+      .catch((error) =>
+        console.error(`Error during HTTP shutdown: ${error?.message || error}`),
+      )
+      .finally(() => process.exit(0));
+  };
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+    process.on(sig, shutdown);
+  }
+}
+
 // Start server
 async function main() {
+  const mode = resolveTransportMode();
   console.error("Starting Evernote MCP server...");
   console.error(`Environment: ${ENVIRONMENT}`);
   console.error(
@@ -2574,9 +2662,13 @@ async function main() {
     console.error(`Webhook URL: ${WEBHOOK_URL}`);
   }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Evernote MCP server running on stdio");
+  if (mode === "http") {
+    await startHttpMode();
+  } else {
+    const transport = new StdioServerTransport();
+    await createEvernoteServer().connect(transport);
+    console.error("Evernote MCP server running on stdio");
+  }
 
   // Auto-start polling if enabled
   if (POLLING_ENABLED) {

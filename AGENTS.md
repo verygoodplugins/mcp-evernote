@@ -27,6 +27,9 @@ npm run build
 # Start the built server (stdio mode)
 npm start
 
+# Start the built server in Streamable HTTP mode (needs EVERNOTE_HTTP_CALLER_KEYS)
+npm run start:http   # dev: npm run dev:http
+
 # Standalone OAuth flow (Claude Desktop) — from source / from dist
 npm run auth
 npm run auth:prod
@@ -47,7 +50,7 @@ npm run test:e2e          # __tests__/e2e
 npm run test:coverage     # with coverage
 ```
 
-All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes two bins: `mcp-evernote` → `dist/index.js` and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=22.12` is required (`package.json` `engines`) — the floor `sanitize-html` 2.17.6+ declares (it depends on ESM-only `htmlparser2`), and a subset of the disjoint range `pdf-parse` (and its `pdfjs-dist` transitive) declares. `__tests__/unit/engine-range.test.ts` pins the 22.12 floor and fails if we ever claim a version `pdf-parse` rejects; `__tests__/unit/dependency-engines.test.ts` fails if any runtime dependency's `engines.node` stops covering our range. CI tests on Node 22.12.x, 22.x and 24.x. `typescript` is held at `6.0.3` (7.x breaks the `@typescript-eslint`/`ts-jest` peer ranges), `marked` at `^12.0.2` (13+ changed the renderer API) and `cheerio` at `1.1.0` (1.1.1+ needs undici 7, which conflicts with the `undici` override); `.github/dependabot.yml` ignores those ranges too.
+All scripts are defined in `package.json` `"scripts"`. The build emits to `dist/` and exposes three bins: `mcp-evernote` → `dist/index.js` (stdio; `--http` for HTTP), `mcp-evernote-http` → `dist/http.js`, and `mcp-evernote-auth` → `dist/auth-standalone.js` (`package.json` `bin`). Node `>=22.12` is required (`package.json` `engines`) — the floor `sanitize-html` 2.17.6+ declares (it depends on ESM-only `htmlparser2`), and a subset of the disjoint range `pdf-parse` (and its `pdfjs-dist` transitive) declares. `__tests__/unit/engine-range.test.ts` pins the 22.12 floor and fails if we ever claim a version `pdf-parse` rejects; `__tests__/unit/dependency-engines.test.ts` fails if any runtime dependency's `engines.node` stops covering our range. CI tests on Node 22.12.x, 22.x and 24.x. `typescript` is held at `6.0.3` (7.x breaks the `@typescript-eslint`/`ts-jest` peer ranges), `marked` at `^12.0.2` (13+ changed the renderer API) and `cheerio` at `1.1.0` (1.1.1+ needs undici 7, which conflicts with the `undici` override); `.github/dependabot.yml` ignores those ranges too.
 
 Jest runs in **native ESM mode**: the `test*` scripts launch `node --experimental-vm-modules node_modules/jest/bin/jest.js` and `jest.config.js` uses the `ts-jest/presets/default-esm` preset, so ESM-only dependencies load as-is. Run tests through `npm test` (plain `npx jest` lacks the flag). In test files, mock modules with `jest.unstable_mockModule(...)` followed by `await import(...)` of the code under test (`jest.mock` hoisting does not work in ESM), import `jest` from `@jest/globals`, use `import.meta.dirname` instead of `__dirname`, and load CommonJS files via `createRequire(import.meta.url)`. ESM namespace exports can't be `jest.spyOn`-ed; spy on object/instance methods instead.
 
@@ -87,7 +90,11 @@ The server uses the classic MCP SDK pattern: a `Server` instance with
 
 ```
 src/
-├── index.ts            # MCP server entry: Server setup, tool definitions + CallTool handlers, polling wiring
+├── index.ts            # MCP server entry: tool definitions + handlers, createEvernoteServer() factory, stdio/HTTP switch, polling wiring
+├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /metrics; no Evernote imports
+├── http.ts             # `mcp-evernote-http` bin: index.ts with --http
+├── request-queue.ts    # Shared Evernote request queue: concurrency, pacing, shared rate-limit backoff, metrics
+├── concurrency.ts      # RPC limit option resolution + Semaphore; limitNoteStoreMethods wraps a store in its own queue
 ├── evernote-api.ts     # EvernoteAPI class — SDK wrapper (CRUD, search, resources, sync); thin ENML conversion wrappers
 ├── markdown.ts         # Markdown ↔ ENML conversion (markdownToENML / enmlToMarkdown), GFM + local attachments
 ├── oauth.ts            # EvernoteOAuth — environment detection + token resolution order
@@ -214,8 +221,16 @@ fallbacks in code.
 | `EVERNOTE_WEBHOOK_URL` | — | `src/index.ts:54` | URL notified on detected changes |
 | `EVERNOTE_WEBHOOK_SECRET` | — | `src/index.ts:55` | HMAC-SHA256 signing secret for webhook payloads |
 | `EVERNOTE_ALLOWED_FILE_ROOTS` | `[os.homedir(), process.cwd()]` | `src/path-security.ts:9` | `path.delimiter`-separated allow-list of roots for local attachments (default at `src/path-security.ts:6`) |
-| `EVERNOTE_MAX_CONCURRENCY` | `3` | `src/index.ts` | Max simultaneous NoteStore RPCs (shared FIFO semaphore in `src/concurrency.ts`); bounds burst width so a wide fan-out doesn't spike past the hourly rate limit |
-| `EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS` | `15` | `src/index.ts` | Auto-retry a rate-limited RPC (errorCode 19) **once** when Evernote's `rateLimitDuration` is ≤ this many seconds; `0` disables auto-retry. Longer waits return a structured error instead |
+| `EVERNOTE_MAX_CONCURRENCY` | `3` | `src/index.ts` | Max simultaneous Evernote RPCs (NoteStore + UserStore) through the one process-wide queue in `src/request-queue.ts`; bounds burst width so a wide fan-out doesn't spike past the hourly rate limit |
+| `EVERNOTE_MIN_REQUEST_INTERVAL_MS` | `0` | `src/index.ts` | Minimum gap between queue dispatches (pacing); `0` disables |
+| `EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS` | `15` | `src/index.ts` | On errorCode 19 with a `rateLimitDuration`, the **whole queue** backs off. Backoffs ≤ this many seconds are waited out and the queue retries the failed call **once**; longer ones (or any when `0`) fail the call, all queued calls and new calls fast with a `rate_limited` error carrying the remaining seconds |
+| `EVERNOTE_TRANSPORT` | `stdio` | `src/index.ts` | `http` selects HTTP mode (same as `--http` / the `mcp-evernote-http` bin). Not `MCP_TRANSPORT`, which is the Claude Code detection flag |
+| `EVERNOTE_HTTP_HOST` / `EVERNOTE_HTTP_PORT` | `127.0.0.1` / `3100` | `src/http-server.ts` | HTTP bind address/port |
+| `EVERNOTE_HTTP_CALLER_KEYS` | — (required in HTTP mode) | `src/http-server.ts` | Comma-separated `name:key` bearer keys; sessions are bound to the caller that opened them |
+| `EVERNOTE_HTTP_ALLOW_UNAUTHENTICATED` | `false` | `src/http-server.ts` | Allow no keys; refused unless the host is loopback |
+| `EVERNOTE_HTTP_ALLOWED_HOSTS` | — | `src/http-server.ts` | `Host` header allow-list (DNS rebinding protection; automatic on loopback) |
+| `EVERNOTE_HTTP_SESSION_IDLE_MS` / `EVERNOTE_HTTP_MAX_SESSIONS` | `1800000` / `64` | `src/http-server.ts` | Idle-session sweep and session cap |
+| `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | `src/http-server.ts` | Per-caller rate limit on `/mcp` and `/metrics` (express-rate-limit, keyed by the authenticated caller name; missing/invalid keys share one bucket) |
 | `EVERNOTE_MAX_RESPONSE_CHARS` | `60000` | `src/index.ts` | Total note-body character budget per multi-note response (`get_note` batch, `search_notes` with `includeContent`); bodies past the budget are dropped with `truncated: true` + original `contentLength` (see `src/response-budget.ts`). Keeps responses under the ~25k-token MCP cap |
 | `EVERNOTE_NOTE_CACHE_SIZE` | `200` | `src/index.ts` | Max notes held in the per-instance USN-keyed body cache (`src/note-cache.ts`); `0` disables it. Re-reading unchanged notes is served from memory instead of re-spending a `getNote` quota call |
 | `EVERNOTE_NOTE_CACHE_SYNC_TTL_MS` | `30000` | `src/index.ts` | How long a `getSyncState` result is trusted before the cache re-probes for external edits. Bounds the staleness window for edits made elsewhere; own writes evict immediately |
@@ -229,6 +244,18 @@ Notes:
   shapes bursts; it does **not** restore quota (the quota is a per-token hourly
   call count). The only real quota levers are fewer calls (caching) and honoring
   the backoff.
+- **Shared request queue** (`src/request-queue.ts`). `src/index.ts` builds ONE
+  `EvernoteRequestQueue` and passes it to every `EvernoteAPI` (including ones
+  rebuilt by reconnect), so stdio and every HTTP session share concurrency,
+  pacing and backoff. Don't add per-caller retry loops for errorCode 19 with a
+  duration; the queue owns that. errorCode 19 *without* a duration is the edit
+  lock and is retried by `updateNote` itself. Metrics appear under `queue` in
+  `evernote_connection({action:"status"})` and on HTTP `/metrics`.
+- **HTTP mode** (`src/http-server.ts`). One SDK `Server` per session, built by
+  `createEvernoteServer()`; handler state stays module-level in `index.ts`.
+  Keep `http-server.ts` free of Evernote imports so it stays unit-testable with
+  a stub server. Several unit tests regex-read `src/index.ts`, so keep the tool
+  handlers there.
 - **Note body cache** (`src/note-cache.ts`). A per-`EvernoteAPI`-instance,
   USN-keyed, LRU cache of note bodies (ENML + metadata; resource binaries and
   recognition stripped). `get_note` (single + batch), `search_notes`

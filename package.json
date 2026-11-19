@@ -10,6 +10,7 @@
   },
   "bin": {
     "mcp-evernote": "dist/index.js",
+    "mcp-evernote-http": "dist/http.js",
     "mcp-evernote-auth": "dist/auth-standalone.js"
   },
   "files": [
@@ -23,9 +24,11 @@
   ],
   "scripts": {
     "build": "tsc && npm run postbuild",
-    "postbuild": "chmod +x dist/index.js dist/auth-standalone.js && cp src/evernote-binary-http-transport.cjs src/silence-evernote-stdio.cjs dist/",
+    "postbuild": "chmod +x dist/index.js dist/http.js dist/auth-standalone.js && cp src/evernote-binary-http-transport.cjs src/silence-evernote-stdio.cjs dist/",
     "dev": "tsx watch src/index.ts",
+    "dev:http": "tsx watch src/index.ts --http",
     "start": "node dist/index.js",
+    "start:http": "node dist/http.js",
     "setup": "node scripts/setup.js",
     "setup:claude": "node scripts/install-to-claude.js",
     "auth": "tsx src/auth-standalone.ts",
@@ -70,6 +73,7 @@
     "dotenv": "^18.0.9",
     "evernote": "^2.0.5",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.5",
     "marked": "^12.0.2",
     "mime-types": "^3.0.2",
     "node-fetch": "^3.3.2",
