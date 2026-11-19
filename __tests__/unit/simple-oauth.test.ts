@@ -2,6 +2,7 @@ import { describe, beforeEach, it, expect } from '@jest/globals';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { EvernoteOAuth } from '../../src/oauth.js';
 
 // Simple OAuth tests focusing on basic functionality
 describe('OAuth Basic Tests', () => {
@@ -21,8 +22,6 @@ describe('OAuth Basic Tests', () => {
 
   it('should detect Claude Code environment correctly', () => {
     process.env.MCP_TRANSPORT = 'stdio';
-
-    const { EvernoteOAuth } = require('../../src/oauth');
     const config = {
       consumerKey: 'test-key',
       consumerSecret: 'test-secret',
@@ -37,8 +36,6 @@ describe('OAuth Basic Tests', () => {
   it('should handle environment variables for tokens', async () => {
     process.env.EVERNOTE_ACCESS_TOKEN = 'test-token';
     process.env.EVERNOTE_NOTESTORE_URL = 'https://test.evernote.com';
-
-    const { EvernoteOAuth } = require('../../src/oauth');
     const config = {
       consumerKey: 'test-key',
       consumerSecret: 'test-secret',
@@ -59,7 +56,6 @@ describe('OAuth Basic Tests', () => {
     process.chdir(tempDir);
 
     try {
-      const { EvernoteOAuth } = require('../../src/oauth');
       const config = {
         consumerKey: 'test-key',
         consumerSecret: 'test-secret',
@@ -79,8 +75,6 @@ describe('OAuth Basic Tests', () => {
     process.env.MCP_TRANSPORT = 'stdio';
     process.env.OAUTH_TOKEN = 'claude-code-token';
     process.env.OAUTH_NOTESTORE_URL = 'https://test.evernote.com/notestore';
-
-    const { EvernoteOAuth } = require('../../src/oauth');
     const config = {
       consumerKey: 'test-key',
       consumerSecret: 'test-secret',
@@ -109,8 +103,6 @@ describe('OAuth Basic Tests', () => {
           userId: 123,
         }),
       );
-
-      const { EvernoteOAuth } = require('../../src/oauth');
       const config = {
         consumerKey: 'test-key',
         consumerSecret: 'test-secret',
@@ -145,8 +137,6 @@ describe('OAuth Basic Tests', () => {
           noteStoreUrl: 'https://file.evernote.com/notestore',
         }),
       );
-
-      const { EvernoteOAuth } = require('../../src/oauth');
       const config = {
         consumerKey: 'test-key',
         consumerSecret: 'test-secret',
@@ -173,8 +163,6 @@ describe('OAuth Basic Tests', () => {
 
     try {
       await fs.writeFile(tokenPath, JSON.stringify({ token: 'file-token' }));
-
-      const { EvernoteOAuth } = require('../../src/oauth');
       const config = {
         consumerKey: 'test-key',
         consumerSecret: 'test-secret',
@@ -192,7 +180,6 @@ describe('OAuth Basic Tests', () => {
   });
 
   it('should keep token-file internals private to callers', () => {
-    const { EvernoteOAuth } = require('../../src/oauth');
     const config = {
       consumerKey: 'test-key',
       consumerSecret: 'test-secret',

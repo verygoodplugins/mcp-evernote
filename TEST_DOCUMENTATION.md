@@ -82,7 +82,7 @@ This means `npm test`, `npm run test:integration`, and `npm run test:e2e` will n
 ## CI/CD Integration
 
 GitHub Actions runs:
-- Node matrix tests (18.x/20.x/22.x) and cross-platform smoke (`test.yml`)
+- Node matrix tests (22.x/24.x) and cross-platform smoke (`test.yml`)
 - Lint + build + tests (`ci.yml`)
 - Security checks (`npm audit`, `audit-ci`) depending on workflow configuration
 
@@ -96,7 +96,7 @@ npm test -- __tests__/unit/simple-oauth.test.ts --verbose
 npm test -- --runInBand
 
 # Run with Node.js debugger
-node --inspect-brk node_modules/.bin/jest --runInBand
+node --experimental-vm-modules --inspect-brk node_modules/jest/bin/jest.js --runInBand
 ```
 
 Keeping this doc at repo root is fine here since the project already uses root-level docs like `CONNECTION_TROUBLESHOOTING.md` and `CHANGELOG.md`. If you prefer a more standard OSS layout, move it to `docs/testing.md` or merge it into `CONTRIBUTING.md` and link from `README.md`.

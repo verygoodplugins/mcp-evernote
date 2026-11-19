@@ -13,15 +13,13 @@ A Model Context Protocol (MCP) server that provides seamless integration with Ev
 
 ### Node.js
 
-**Supported Node.js: `>=20.16.0 <21` or `>=22.3.0`.** In practice that means
-Node 20.16+, 22.3+, 24, or newer — the two gaps are Node 21.x and Node
-22.0–22.2. This is not an arbitrary floor: it mirrors the `engines` range that
-the PDF attachment extraction path (`pdf-parse`, and its `pdfjs-dist`
-transitive dependency) actually declares, and the range is genuinely disjoint.
+**Supported Node.js: `>=22.12`** (Node 22.12+, 24, or newer). The floor comes
+from the HTML sanitizer: `sanitize-html` 2.17.6+ depends on the ESM-only
+`htmlparser2` and declares Node `>=22.12.0`. It also sits inside the range the
+PDF attachment extraction path (`pdf-parse` / `pdfjs-dist`) supports.
 
-Check with `node --version`. On Node 18 or 21, or on 22.0–22.2, upgrade before
-installing — Node 21 reached end-of-life in June 2024, and 22.3+ supersedes the
-early 22 patches.
+Check with `node --version`. On Node 20, 21, or 22.0–22.11, upgrade before
+installing — Node 20 and 21 are end-of-life.
 
 > **Upgrading from 1.x?** 2.0.0 raises the Node requirement from 18.18.0 and changes
 > `evernote_get_resource` to return extracted text by default instead of binary

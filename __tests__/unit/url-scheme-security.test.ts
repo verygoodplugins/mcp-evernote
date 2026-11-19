@@ -6,7 +6,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 const markdownSource = readFileSync(
-  resolve(__dirname, '../../src/markdown.ts'),
+  resolve(import.meta.dirname, '../../src/markdown.ts'),
   'utf-8',
 );
 

@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import {
   DEFAULT_PARENT_WATCHDOG_MS,
   installStdioLifecycle,

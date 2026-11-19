@@ -7,14 +7,14 @@ import semver from 'semver';
  * declares in `engines.node`.
  *
  * Why this exists: sanitize-html 2.17.6+ moved to ESM-only htmlparser2 and
- * declared `node >=22.12.0`. A routine Dependabot security bump pulled it in,
- * which (a) broke `require('sanitize-html')` on the Node 20.16 floor we still
- * support, and (b) made Jest fail with "Cannot use import statement outside a
- * module". This test turns that into one clear failure naming the package,
- * instead of a cryptic SyntaxError in unrelated suites.
+ * declared `node >=22.12.0`. A routine Dependabot security bump pulled it in
+ * while we still supported Node 20.16, which broke `require('sanitize-html')`
+ * there. The floor is now 22.12 (issue #82), but the same trap applies to any
+ * future bump that raises a dependency's floor above ours: this test turns it
+ * into one clear failure naming the package.
  */
 
-const readJson = (path: string) => JSON.parse(readFileSync(resolve(__dirname, path), 'utf-8'));
+const readJson = (path: string) => JSON.parse(readFileSync(resolve(import.meta.dirname, path), 'utf-8'));
 
 const pkg = readJson('../../package.json');
 const ourRange: string = pkg.engines.node;
