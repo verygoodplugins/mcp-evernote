@@ -102,12 +102,12 @@ interface QueuedTask {
   attempts: number;
 }
 
+// Deliberately NOT unref'd: in a one-shot piped stdio run (stdin already at
+// EOF), a call waiting out a short backoff or pacing gap must keep the event
+// loop alive or Node exits and drops the response. Waits are short (≤ the
+// auto-retry threshold or the pacing interval).
 function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    // A pending backoff/pacing timer must not keep an idle process alive.
-    timer.unref?.();
-  });
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function resolveInt(value: number | undefined, fallback: number, min: number) {
@@ -330,13 +330,19 @@ export class EvernoteRequestQueue {
       seconds <= this.rateLimitAutoRetrySeconds;
     this.startPause(seconds, isShort ? "wait" : "fail-fast");
 
-    if (isShort && task.attempts === 1) {
+    if (isShort && task.attempts === 1 && this.pauseMode === "wait") {
       // Queue-owned retry: run it again first once the pause ends.
       this.queueRetries++;
       this.pending.unshift(task);
       return;
     }
     this.failed++;
+    if (isShort && this.pauseMode === "fail-fast") {
+      // A long backoff already covers this short one; nothing will wait it
+      // out, so report the time actually left instead of the short window.
+      task.reject(new RateLimitBackoffError(this.remainingSeconds()));
+      return;
+    }
     task.reject(error);
   }
 

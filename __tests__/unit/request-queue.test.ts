@@ -369,6 +369,35 @@ describe("EvernoteRequestQueue — shared backoff on RATE_LIMIT_REACHED", () => 
     expect(queue.getMetrics().backoff.mode).toBe("fail-fast");
   });
 
+  it("a short rate limit landing during a long backoff rejects promptly (no stranded retry)", async () => {
+    const time = fakeTime();
+    const queue = new EvernoteRequestQueue({
+      maxConcurrency: 2,
+      rateLimitAutoRetrySeconds: 15,
+      now: time.now,
+      sleep: time.sleep,
+    });
+    const gate = deferred<void>();
+    const long = queue.run(async () => {
+      throw rateLimitError(600);
+    });
+    const shortInvoke = jest.fn(async () => {
+      await gate.promise;
+      throw rateLimitError(2);
+    });
+    const short = queue.run(shortInvoke); // in flight when the long hit lands
+    const [longError] = await Promise.all([long.catch((e) => e), flush()]);
+    expect(longError).toMatchObject({ rateLimitDuration: 600 });
+
+    gate.resolve();
+    const shortError = await short.catch((e) => e); // must settle, not hang
+    expect(shortError).toBeInstanceOf(RateLimitBackoffError);
+    expect(shortError.rateLimitDuration).toBe(600);
+    expect(shortInvoke).toHaveBeenCalledTimes(1);
+    expect(queue.getMetrics()).toMatchObject({ queued: 0, queueRetries: 0 });
+    expect(time.sleeps).toHaveLength(0);
+  });
+
   it("ignores errorCode 19 without a duration (edit lock): no pause, no retry", async () => {
     const time = fakeTime();
     const queue = new EvernoteRequestQueue({ now: time.now, sleep: time.sleep });
