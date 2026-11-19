@@ -8,12 +8,12 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 const indexSource = readFileSync(
-  resolve(__dirname, '../../src/index.ts'),
+  resolve(import.meta.dirname, '../../src/index.ts'),
   'utf-8',
 );
 
 const evernoteApiSource = readFileSync(
-  resolve(__dirname, '../../src/evernote-api.ts'),
+  resolve(import.meta.dirname, '../../src/evernote-api.ts'),
   'utf-8',
 );
 

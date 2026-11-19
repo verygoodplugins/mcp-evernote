@@ -12,9 +12,10 @@ jobs:
 
         strategy:
             matrix:
-                # 24.x matches the Node version the release-please npm-publish job
-                # runs `npm test` on, so a publish-time-only failure is caught here.
-                node-version: [20.16.x, 22.x, 24.x]
+                # 22.12.x is the engines.node floor; 24.x matches the Node version the
+                # release-please npm-publish job runs `npm test` on, so a
+                # publish-time-only failure is caught here.
+                node-version: [22.12.x, 22.x, 24.x]
 
         steps:
             - name: Checkout code
@@ -58,7 +59,7 @@ jobs:
             - name: Setup Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "20.x"
+                  node-version: "22.x"
                   cache: "npm"
 
             - name: Install dependencies
@@ -90,7 +91,7 @@ jobs:
             - name: Setup Node.js
               uses: actions/setup-node@v4
               with:
-                  node-version: "20.x"
+                  node-version: "22.x"
                   cache: "npm"
 
             - name: Install dependencies
@@ -110,7 +111,7 @@ jobs:
         strategy:
             matrix:
                 os: [ubuntu-latest, windows-latest, macos-latest]
-                node-version: [20.16.x, 22.x]
+                node-version: [22.x, 24.x]
 
         steps:
             - name: Checkout code

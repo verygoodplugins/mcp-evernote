@@ -2,10 +2,10 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 describe('auth and security documentation', () => {
-  const readme = readFileSync(resolve(__dirname, '../../README.md'), 'utf-8');
+  const readme = readFileSync(resolve(import.meta.dirname, '../../README.md'), 'utf-8');
   // CLAUDE.md is now the bare `@AGENTS.md` import; AGENTS.md holds the canonical
   // agent-direction content, so assert the documentation guarantees against it.
-  const agents = readFileSync(resolve(__dirname, '../../AGENTS.md'), 'utf-8');
+  const agents = readFileSync(resolve(import.meta.dirname, '../../AGENTS.md'), 'utf-8');
 
   it('documents token-file fallback without claiming env-only auth', () => {
     expect(readme).toContain('EVERNOTE_ACCESS_TOKEN');

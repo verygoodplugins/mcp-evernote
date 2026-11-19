@@ -56,7 +56,7 @@ describe('forceUpdate guard rails (M6)', () => {
 
   describe('tool schema description', () => {
     const indexSource = readFileSync(
-      resolve(__dirname, '../../src/index.ts'),
+      resolve(import.meta.dirname, '../../src/index.ts'),
       'utf-8',
     );
 

@@ -9,7 +9,7 @@ const runtimeEntrypoints = [
 
 describe('dotenv runtime logging', () => {
   it.each(runtimeEntrypoints)('%s loads dotenv quietly', (_name, relativePath) => {
-    const source = readFileSync(resolve(__dirname, relativePath), 'utf-8');
+    const source = readFileSync(resolve(import.meta.dirname, relativePath), 'utf-8');
 
     expect(source).toContain('config({ quiet: true })');
     expect(source).not.toMatch(/\bconfig\(\s*\)/);

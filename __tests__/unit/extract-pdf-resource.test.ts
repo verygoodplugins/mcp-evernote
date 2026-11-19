@@ -1,12 +1,13 @@
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 
-jest.mock("pdf-parse", () => ({
+// ESM mocks must be registered before the modules under test are imported,
+// so the imports below are dynamic.
+jest.unstable_mockModule("pdf-parse", () => ({
   PDFParse: jest.fn(),
 }));
 
-import { PDFParse } from "pdf-parse";
-import { EvernoteAPI } from "../../src/evernote-api.js";
-import * as pdfExtract from "../../src/pdf-extract.js";
+const { PDFParse } = await import("pdf-parse");
+const { EvernoteAPI } = await import("../../src/evernote-api.js");
 
 const MockedPDFParse = PDFParse as unknown as jest.Mock;
 
@@ -180,12 +181,15 @@ describe("EvernoteAPI.extractResourceText", () => {
   });
 
   it("falls back to OCR when pdf-parse is unavailable", async () => {
-    const unavailableSpy = jest
-      .spyOn(pdfExtract, "extractPdfText")
+    // ESM module namespaces are immutable, so the module-level extractPdfText
+    // binding can't be spied on. Stub the instance method that wraps it instead.
+    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
+    const api = makeApi(getResource);
+    jest
+      .spyOn(api, "extractPdfTextFromResource")
       .mockResolvedValue(
         "[PDF text extraction unavailable — the pdf-parse module could not be loaded (requires Node >= 20.16)]",
       );
-    const getResource = jest.fn<(...args: any[]) => Promise<any>>();
     const prefetched = {
       mime: "application/pdf",
       data: { body: Buffer.from("%PDF-1.4") },
@@ -198,15 +202,9 @@ describe("EvernoteAPI.extractResourceText", () => {
       },
     };
 
-    try {
-      const result = await makeApi(getResource).extractResourceText(
-        "pdf-guid",
-        prefetched,
-      );
-      expect(result).toBe("Scanned PDF OCR");
-    } finally {
-      unavailableSpy.mockRestore();
-    }
+    const result = await api.extractResourceText("pdf-guid", prefetched);
+    expect(result).toBe("Scanned PDF OCR");
+    expect(MockedPDFParse).not.toHaveBeenCalled();
   });
 
   it("reuses prefetched recognition data and does not download the resource again", async () => {

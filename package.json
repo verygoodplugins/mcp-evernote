@@ -6,7 +6,7 @@
   "type": "module",
   "mcpName": "io.github.verygoodplugins/mcp-evernote",
   "engines": {
-    "node": ">=20.16.0 <21 || >=22.3.0"
+    "node": ">=22.12"
   },
   "bin": {
     "mcp-evernote": "dist/index.js",
@@ -30,12 +30,12 @@
     "setup:claude": "node scripts/install-to-claude.js",
     "auth": "tsx src/auth-standalone.ts",
     "auth:prod": "node dist/auth-standalone.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:unit": "jest __tests__/unit",
-    "test:integration": "jest __tests__/integration",
-    "test:e2e": "jest __tests__/e2e",
+    "test": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js --coverage",
+    "test:unit": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js __tests__/unit",
+    "test:integration": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js __tests__/integration",
+    "test:e2e": "node --experimental-vm-modules --disable-warning=ExperimentalWarning node_modules/jest/bin/jest.js __tests__/e2e",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
     "prepublishOnly": "npm run build",
@@ -75,7 +75,7 @@
     "node-fetch": "^3.3.2",
     "open": "^11.0.4",
     "pdf-parse": "^2.4.5",
-    "sanitize-html": "2.17.5",
+    "sanitize-html": "^2.18.2",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2",
     "zod": "^4.4.3"
@@ -114,6 +114,7 @@
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
     "audit-ci": "^7.1.0",
+    "esbuild": "^0.28.2",
     "eslint": "^10.14.0",
     "jest": "^30.4.2",
     "prettier": "^3.1.0",

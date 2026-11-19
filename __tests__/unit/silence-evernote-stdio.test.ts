@@ -1,10 +1,12 @@
+import { jest } from "@jest/globals";
 import { readFileSync } from "fs";
+import { createRequire } from "module";
 import { resolve } from "path";
 
 // CJS silence module + Evernote transport (package-local require, not cwd/argv).
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// Jest runs test files as ESM, so load the CJS modules via createRequire.
+const require = createRequire(import.meta.url);
 const { silenceEvernoteStdio } = require("../../src/silence-evernote-stdio.cjs");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const BinaryHttpTransport = require("evernote/lib/thrift/transport/binaryHttpTransport.js");
 
 describe("silenceEvernoteStdio", () => {
@@ -54,7 +56,7 @@ describe("silenceEvernoteStdio", () => {
 
   it("is applied by the MCP stdio entrypoint before dotenv/config work", () => {
     const source = readFileSync(
-      resolve(__dirname, "../../src/index.ts"),
+      resolve(import.meta.dirname, "../../src/index.ts"),
       "utf-8",
     );
     const silenceCall = source.indexOf("silenceEvernoteStdio()");
@@ -67,7 +69,7 @@ describe("silenceEvernoteStdio", () => {
 
   it("loads the transport via a package-local CJS shim", () => {
     const shim = readFileSync(
-      resolve(__dirname, "../../src/silence-evernote-stdio.cjs"),
+      resolve(import.meta.dirname, "../../src/silence-evernote-stdio.cjs"),
       "utf-8",
     );
     // Strip comments before asserting we never resolve via cwd/argv.
