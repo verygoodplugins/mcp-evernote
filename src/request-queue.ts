@@ -270,11 +270,19 @@ export class EvernoteRequestQueue {
       return;
     }
     this.pacingTimerPending = true;
+    const dispatchedAtSchedule = this.dispatched;
     void this.sleep(waitMs).then(() => {
       this.pacingTimerPending = false;
       // The sleep is authoritative: allow the next dispatch without
-      // re-reading the clock (keeps injected fake clocks from spinning).
-      this.pacingReady = true;
+      // re-reading the clock (keeps injected fake clocks from spinning) —
+      // but only if nothing was dispatched while it ran. A completion can
+      // pump() once nextDispatchAt has passed but before this timer fires;
+      // that dispatch moved nextDispatchAt, so this timer is stale and must
+      // not grant an extra slot. pump() then re-checks the clock and
+      // schedules a fresh wait.
+      if (this.dispatched === dispatchedAtSchedule) {
+        this.pacingReady = true;
+      }
       this.pump();
     });
   }

@@ -158,6 +158,52 @@ describe("EvernoteRequestQueue — pacing", () => {
     expect(queue.getMetrics().waitMs).toEqual({ last: 2000, max: 2000, avg: 1000 });
   });
 
+  it("a stale pacing timer does not grant an extra dispatch slot", async () => {
+    const time = fakeTime(0);
+    const queue = new EvernoteRequestQueue({
+      maxConcurrency: 3,
+      minIntervalMs: 100,
+      now: time.now,
+      sleep: time.sleep,
+    });
+    const startedAt: number[] = [];
+    const first = deferred<void>();
+    const runs = [
+      queue.run(async () => {
+        startedAt.push(time.now());
+        await first.promise;
+      }),
+      queue.run(async () => {
+        startedAt.push(time.now());
+      }),
+      queue.run(async () => {
+        startedAt.push(time.now());
+      }),
+    ];
+
+    await flush();
+    expect(startedAt).toEqual([0]);
+    expect(time.sleeps.map((s) => s.ms)).toEqual([100]);
+
+    // The interval elapses and the first call completes before the pacing
+    // timer callback runs: the completion's pump() dispatches the second call.
+    time.advance(100);
+    first.resolve();
+    await flush();
+    expect(startedAt).toEqual([0, 100]);
+
+    // Now the (stale) timer fires at the same instant. It must not let the
+    // third call through at t=100; the next slot is t=200.
+    time.sleeps.shift()!.gate.resolve();
+    await flush();
+    expect(startedAt).toEqual([0, 100]);
+    expect(time.sleeps.map((s) => s.ms)).toEqual([100]);
+
+    await time.fire();
+    await Promise.all(runs);
+    expect(startedAt).toEqual([0, 100, 200]);
+  });
+
   it("does not pace when minIntervalMs is 0 (default)", async () => {
     const time = fakeTime();
     const queue = new EvernoteRequestQueue({
