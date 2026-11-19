@@ -1,30 +1,31 @@
 /**
- * Bounded concurrency + short-wait auto-retry for Evernote NoteStore RPCs.
+ * RPC limit options + the store wrapper used by EvernoteAPI.
  *
  * The Evernote hourly rate limit is a per-token call-count quota: throttling
  * cannot restore quota, but bounding burst width keeps a wide fan-out from
- * spiking into errorCode 19, and honoring a short `rateLimitDuration` lets a
- * transient limit self-heal without bubbling a failure to the agent. Longer
- * waits are surfaced as structured errors (see src/errors.ts) so the caller
- * can reschedule.
+ * spiking into errorCode 19, and a shared backoff that honors
+ * `rateLimitDuration` stops callers from compounding retries. The queue itself
+ * lives in src/request-queue.ts; this module keeps the option resolution and
+ * the `limitNoteStoreMethods` entry point (a store wrapped by its own queue)
+ * for callers that don't share a process-wide queue.
  */
 
-import { getEvernoteErrorMeta, RATE_LIMIT_ERROR_CODE } from "./errors.js";
+import {
+  DEFAULT_MAX_CONCURRENCY,
+  DEFAULT_MIN_REQUEST_INTERVAL_MS,
+  DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
+  EvernoteRequestQueue,
+  queueStoreMethods,
+  RequestQueueOptions,
+} from "./request-queue.js";
 
-export const DEFAULT_MAX_CONCURRENCY = 3;
-export const DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS = 15;
+export {
+  DEFAULT_MAX_CONCURRENCY,
+  DEFAULT_MIN_REQUEST_INTERVAL_MS,
+  DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
+};
 
-export interface RpcLimitOptions {
-  /** Max simultaneous in-flight NoteStore RPCs. */
-  maxConcurrency: number;
-  /**
-   * Auto-retry a rate-limited RPC once when Evernote's rateLimitDuration is at
-   * or below this many seconds. 0 disables auto-retry entirely.
-   */
-  rateLimitAutoRetrySeconds: number;
-  /** Injectable sleep for deterministic tests. */
-  sleep?: (ms: number) => Promise<void>;
-}
+export type RpcLimitOptions = RequestQueueOptions;
 
 /**
  * A FIFO counting semaphore. `acquire()` resolves with a `release` function;
@@ -72,10 +73,6 @@ export class Semaphore {
   }
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function resolveIntegerOption(
   value: number | undefined,
   fallback: number,
@@ -99,73 +96,24 @@ export function resolveRpcLimitOptions(
       DEFAULT_RATE_LIMIT_AUTO_RETRY_SECONDS,
       0,
     ),
+    minIntervalMs: resolveIntegerOption(
+      opts?.minIntervalMs,
+      DEFAULT_MIN_REQUEST_INTERVAL_MS,
+      0,
+    ),
     sleep: opts?.sleep,
+    now: opts?.now,
   };
 }
 
-async function runLimited<R>(
-  invoke: () => Promise<R>,
-  semaphore: Semaphore,
-  autoRetrySeconds: number,
-  sleep: (ms: number) => Promise<void>,
-): Promise<R> {
-  let release = await semaphore.acquire();
-  try {
-    return await invoke();
-  } catch (error: any) {
-    const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
-    const canRetry =
-      errorCode === RATE_LIMIT_ERROR_CODE &&
-      autoRetrySeconds > 0 &&
-      typeof rateLimitDuration === "number" &&
-      rateLimitDuration > 0 &&
-      rateLimitDuration <= autoRetrySeconds;
-    if (!canRetry) {
-      throw error;
-    }
-    // Release BEFORE sleeping so a short rate-limit wait doesn't pin a permit
-    // and stall other queued RPCs behind us.
-    release();
-    await sleep(rateLimitDuration * 1000);
-    release = await semaphore.acquire();
-    return await invoke(); // retry exactly once; a second failure propagates
-  } finally {
-    release();
-  }
-}
-
 /**
- * Wrap a NoteStore so every method call is gated by a shared semaphore and gets
- * short-wait rate-limit auto-retry. Method wrappers are memoized so identity is
- * stable across property reads. `this` binds to the real store, so an RPC's
- * internal property access is not re-proxied (only top-level calls are limited).
+ * Wrap a NoteStore with its own request queue (concurrency limit, pacing,
+ * shared backoff; see src/request-queue.ts). Prefer passing one process-wide
+ * `EvernoteRequestQueue` to EvernoteAPI so every caller shares the backoff.
  */
 export function limitNoteStoreMethods<T extends object>(
   noteStore: T,
   opts: RpcLimitOptions,
 ): T {
-  const semaphore = new Semaphore(opts.maxConcurrency);
-  const sleep = opts.sleep ?? defaultSleep;
-  const wrapped = new Map<PropertyKey, any>();
-
-  return new Proxy(noteStore, {
-    get(target, prop) {
-      const value = Reflect.get(target, prop);
-      if (typeof value !== "function") {
-        return value;
-      }
-      let fn = wrapped.get(prop);
-      if (!fn) {
-        fn = (...args: any[]) =>
-          runLimited(
-            () => value.apply(target, args),
-            semaphore,
-            opts.rateLimitAutoRetrySeconds,
-            sleep,
-          );
-        wrapped.set(prop, fn);
-      }
-      return fn;
-    },
-  }) as T;
+  return queueStoreMethods(noteStore, new EvernoteRequestQueue(opts));
 }

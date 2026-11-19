@@ -23,11 +23,8 @@ import { basename, extname } from "path";
 import * as cheerio from "cheerio";
 import { validateLocalFilePath } from "./path-security.js";
 import { extractPdfText } from "./pdf-extract.js";
-import {
-  limitNoteStoreMethods,
-  resolveRpcLimitOptions,
-  RpcLimitOptions,
-} from "./concurrency.js";
+import { resolveRpcLimitOptions, RpcLimitOptions } from "./concurrency.js";
+import { EvernoteRequestQueue, queueStoreMethods } from "./request-queue.js";
 import {
   getEvernoteErrorMeta,
   isAuthErrorCode,
@@ -114,21 +111,32 @@ export class EvernoteAPI {
   private noteStore: any;
   private client: any;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly requestQueue: EvernoteRequestQueue;
   // USN-keyed body cache; null when disabled (EVERNOTE_NOTE_CACHE_SIZE=0).
   private readonly noteCache: NoteCache | null;
 
   constructor(
     client: any,
     tokens: OAuthTokens,
-    options?: Partial<RpcLimitOptions> & { noteCache?: NoteCacheOptions },
+    options?: Partial<RpcLimitOptions> & {
+      noteCache?: NoteCacheOptions;
+      /**
+       * Process-wide queue shared by every caller (stdio, HTTP sessions) and
+       * across reconnects, so a rate-limit backoff isn't reset by a new
+       * EvernoteAPI instance. Defaults to a private queue built from options.
+       */
+      requestQueue?: EvernoteRequestQueue;
+    },
   ) {
     this.client = client;
     const rpcLimitOptions = resolveRpcLimitOptions(options);
     this.sleep = rpcLimitOptions.sleep ?? defaultSleep;
-    // Gate every NoteStore RPC through a shared concurrency limiter with
-    // short-wait rate-limit auto-retry (see src/concurrency.ts).
+    this.requestQueue =
+      options?.requestQueue ?? new EvernoteRequestQueue(rpcLimitOptions);
+    // Gate every NoteStore RPC through the request queue: concurrency limit,
+    // pacing, shared rate-limit backoff (see src/request-queue.ts).
     const rawNoteStore = client.getNoteStore(tokens.noteStoreUrl);
-    this.noteStore = limitNoteStoreMethods(rawNoteStore, rpcLimitOptions);
+    this.noteStore = queueStoreMethods(rawNoteStore, this.requestQueue);
     // The cache relies on getSyncState/getFilteredSyncChunk to detect external
     // edits. Partial NoteStore implementations (some unit-test fakes, embedded
     // callers) omit them; enabling the cache there would turn every read into a
@@ -1230,19 +1238,22 @@ export class EvernoteAPI {
     return normalized;
   }
 
+  /** UserStore RPCs count against the same quota, so they share the queue. */
+  private queuedUserStore(): any {
+    return queueStoreMethods(this.client.getUserStore(), this.requestQueue);
+  }
+
   private computeHash(data: Buffer): Buffer {
     return createHash("md5").update(data).digest();
   }
 
   // User info
   async getUser(): Promise<any> {
-    const userStore = this.client.getUserStore();
-    return await userStore.getUser();
+    return await this.queuedUserStore().getUser();
   }
 
   async getQuotaInfo(): Promise<any> {
-    const userStore = this.client.getUserStore();
-    const user = await userStore.getUser();
+    const user = await this.queuedUserStore().getUser();
     return {
       uploadLimit: user.accounting.uploadLimit,
       uploadLimitEnd: user.accounting.uploadLimitEnd,

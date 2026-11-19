@@ -221,7 +221,11 @@ describe("limitNoteStoreMethods", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("frees the permit while awaiting a rate-limit retry", async () => {
+  // Semantics changed with the shared request queue (#85): a short rate-limit
+  // backoff now pauses the WHOLE queue instead of only the failing caller, so
+  // other callers don't burn quota during Evernote's window. The queue-owned
+  // retry of the failed call runs first, then the waiting caller.
+  it("pauses every caller during a short rate-limit backoff, retried call first", async () => {
     let releaseSleep!: () => void;
     const sleepGate = new Promise<void>((r) => {
       releaseSleep = r;
@@ -255,17 +259,18 @@ describe("limitNoteStoreMethods", () => {
       }),
     );
 
-    const slowP = (limited as any).slow(); // grabs permit, 429s, releases, sleeps
+    const slowP = (limited as any).slow(); // rate-limited → queue pauses
     await flush();
-    const fastP = (limited as any).fast(); // must run on the freed permit
+    const fastP = (limited as any).fast(); // must wait out the shared pause
     await flush();
-    expect(order).toEqual(["fast-done"]);
+    expect(order).toEqual([]);
+    expect(noteStore.fast).not.toHaveBeenCalled();
 
-    releaseSleep(); // let slow re-acquire and succeed
+    releaseSleep(); // pause ends: queue retries slow first, then fast
     const [s, f] = await Promise.all([slowP, fastP]);
     expect(s).toBe("slow");
     expect(f).toBe("fast");
-    expect(order).toEqual(["fast-done", "slow-done"]);
+    expect(order).toEqual(["slow-done", "fast-done"]);
   });
 });
 
