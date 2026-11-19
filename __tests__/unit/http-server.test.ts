@@ -118,7 +118,7 @@ describe("resolveHttpConfig rate limit", () => {
 });
 
 describe("HTTP rate limiting", () => {
-  it("returns 429 per credential once the per-minute limit is hit", async () => {
+  it("returns 429 per caller once the per-minute limit is hit", async () => {
     const running = await startHttpServer({
       host: "127.0.0.1",
       port: 0,
@@ -139,7 +139,15 @@ describe("HTTP rate limiting", () => {
       const limited = await get("hub-key");
       expect(limited.status).toBe(429);
       expect((await limited.json()).error.message).toMatch(/Too many requests/);
-      // A different credential has its own bucket.
+      // Header variants of the same key share the caller's bucket.
+      const variant = await fetch(metrics, { headers: { authorization: "bearer   hub-key " } });
+      expect(variant.status).toBe(429);
+      // A different caller has its own bucket.
+      expect((await get("cursor-key")).status).toBe(200);
+      // Invalid keys share one bucket, separate from valid callers.
+      expect((await get("guess-1")).status).toBe(401);
+      expect((await get("guess-2")).status).toBe(401);
+      expect((await get("guess-3")).status).toBe(429);
       expect((await get("cursor-key")).status).toBe(200);
     } finally {
       await running.close();

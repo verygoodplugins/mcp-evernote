@@ -15,8 +15,9 @@
  * - `GET /metrics` — queue metrics + session counts (authenticated).
  * - `GET /healthz` — liveness only, unauthenticated, no details.
  *
- * `/mcp` and `/metrics` are rate limited per presented credential before the
- * caller key is checked (`EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE`, default 600).
+ * `/mcp` and `/metrics` are rate limited per authenticated caller; requests
+ * with a missing or invalid key share one bucket
+ * (`EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE`, default 600).
  */
 
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
@@ -58,7 +59,7 @@ export interface HttpConfig {
   allowedHosts?: string[];
   sessionIdleMs: number;
   maxSessions: number;
-  /** Requests per minute per presented credential on /mcp and /metrics. */
+  /** Requests per minute per caller on /mcp and /metrics. */
   rateLimitPerMinute?: number;
 }
 
@@ -256,17 +257,23 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     next();
   };
 
-  // Keyed by a digest of the presented Authorization header rather than the
-  // client IP: behind the hub proxy every caller shares 127.0.0.1, and keying
-  // by credential keeps one noisy (or unauthenticated) client from starving the
-  // others. Caller keys are high-entropy, so this is about abuse, not guessing.
+  // Keyed by the authenticated caller rather than the client IP: behind the
+  // hub proxy every caller shares 127.0.0.1. Resolving the caller (instead of
+  // hashing the raw header) means scheme-casing/whitespace variants of the
+  // same key share one bucket. Missing, malformed or unknown keys all share a
+  // single "unauthenticated" bucket, so key-guessing is throttled without
+  // affecting valid callers.
   const limiter = rateLimit({
     windowMs: 60_000,
     limit: options.rateLimitPerMinute ?? DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE,
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    keyGenerator: (req) =>
-      digest(String(req.headers.authorization ?? "")).toString("hex"),
+    keyGenerator: (req) => {
+      const caller = options.allowUnauthenticated
+        ? null
+        : authenticateCaller(req.headers.authorization, options.callerKeys);
+      return caller ? `caller:${caller.name}` : "unauthenticated";
+    },
     validate: false,
     handler: (_req, res) => {
       jsonRpcError(res, 429, "Too many requests; slow down and retry");

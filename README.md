@@ -348,7 +348,7 @@ claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
 | `EVERNOTE_HTTP_ALLOWED_HOSTS` | (unset) | Comma-separated `Host` header allow-list (DNS rebinding protection). Loopback hosts get it automatically |
 | `EVERNOTE_HTTP_SESSION_IDLE_MS` | `1800000` | Close sessions idle this long |
 | `EVERNOTE_HTTP_MAX_SESSIONS` | `64` | Max open sessions |
-| `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | Requests per minute per presented credential on `/mcp` and `/metrics` (429 when exceeded) |
+| `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | Requests per minute per caller on `/mcp` and `/metrics` (429 when exceeded); missing/invalid keys share one bucket |
 
 Endpoints: `/mcp` (Streamable HTTP), `/metrics` (queue + session counts,
 needs a key), `/healthz` (liveness, no key). Local file paths in tools like
