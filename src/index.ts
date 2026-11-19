@@ -417,7 +417,7 @@ async function ensureAPI(forceReinit: boolean = false): Promise<EvernoteAPI> {
 
   try {
     lastInitAttempt = now;
-    const { client, tokens } = await oauth.getAuthenticatedClient();
+    const { client, tokens } = await oauth.getAuthenticatedClient({ requestQueue });
     api = new EvernoteAPI(client, tokens, {
       ...RPC_LIMIT_OPTIONS,
       noteCache: NOTE_CACHE_OPTIONS,

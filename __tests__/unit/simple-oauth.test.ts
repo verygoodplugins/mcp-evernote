@@ -1,8 +1,9 @@
-import { describe, beforeEach, it, expect } from '@jest/globals';
+import { describe, beforeEach, it, expect, jest } from '@jest/globals';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { EvernoteOAuth } from '../../src/oauth.js';
+import { EvernoteRequestQueue, RateLimitBackoffError } from '../../src/request-queue.js';
 
 // Simple OAuth tests focusing on basic functionality
 describe('OAuth Basic Tests', () => {
@@ -31,6 +32,32 @@ describe('OAuth Basic Tests', () => {
 
     const oauth = new EvernoteOAuth(config);
     expect((oauth as any).isClaudeCode).toBe(true);
+  });
+
+  it('routes noteStoreUrl discovery through the shared request queue', async () => {
+    // A long rate-limit puts the queue into fail-fast backoff; discovery must
+    // be rejected locally by the queue (no RPC is sent) and surface as a
+    // rate-limit error, not "token may be invalid".
+    const queue = new EvernoteRequestQueue({ rateLimitAutoRetrySeconds: 1 });
+    const limited: any = new Error('RATE_LIMIT_REACHED');
+    limited.errorCode = 19;
+    limited.rateLimitDuration = 3600;
+    await expect(queue.run(async () => { throw limited; })).rejects.toBe(limited);
+    expect(queue.getMetrics()).toMatchObject({ backoff: { active: true } });
+
+    process.env.EVERNOTE_ACCESS_TOKEN = 'test-token';
+    const oauth = new EvernoteOAuth({
+      consumerKey: 'test-key',
+      consumerSecret: 'test-secret',
+      sandbox: true,
+      china: false,
+    });
+    jest.spyOn(oauth, 'getAccessToken').mockResolvedValue({ token: 'test-token' } as any);
+
+    await expect(oauth.getAuthenticatedClient({ requestQueue: queue })).rejects.toBeInstanceOf(
+      RateLimitBackoffError,
+    );
+    expect(queue.getMetrics()).toMatchObject({ dispatched: 1, rejectedDuringBackoff: 1 });
   });
 
   it('should handle environment variables for tokens', async () => {
