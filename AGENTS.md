@@ -89,7 +89,7 @@ The server uses the classic MCP SDK pattern: a `Server` instance with
 ```
 src/
 ├── index.ts            # MCP server entry: tool definitions + handlers, createEvernoteServer() factory, stdio/HTTP switch, polling wiring
-├── http-server.ts      # Streamable HTTP (+ legacy SSE) app: caller-key auth, sessions, /metrics; no Evernote imports
+├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /metrics; no Evernote imports
 ├── http.ts             # `mcp-evernote-http` bin: index.ts with --http
 ├── request-queue.ts    # Shared Evernote request queue: concurrency, pacing, shared rate-limit backoff, metrics
 ├── concurrency.ts      # RPC limit option resolution + Semaphore; limitNoteStoreMethods wraps a store in its own queue

@@ -351,8 +351,7 @@ claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
 | `EVERNOTE_HTTP_SESSION_IDLE_MS` | `1800000` | Close sessions idle this long |
 | `EVERNOTE_HTTP_MAX_SESSIONS` | `64` | Max open sessions |
 
-Endpoints: `/mcp` (Streamable HTTP), `/sse` + `/messages` (the deprecated
-HTTP+SSE transport, for older clients), `/metrics` (queue + session counts,
+Endpoints: `/mcp` (Streamable HTTP), `/metrics` (queue + session counts,
 needs a key), `/healthz` (liveness, no key). Local file paths in tools like
 `evernote_add_resource_to_note` resolve on the machine running the server.
 

@@ -139,7 +139,7 @@ describe("HTTP app (Streamable HTTP) with a stub MCP server", () => {
     },
   };
 
-  /** Parse a JSON or SSE-framed JSON-RPC response body. */
+  /** Parse a JSON or event-stream-framed JSON-RPC response body. */
   async function readRpc(res: Response): Promise<any> {
     const text = await res.text();
     if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -193,9 +193,8 @@ describe("HTTP app (Streamable HTTP) with a stub MCP server", () => {
     expect(bad.status).toBe(401);
   });
 
-  it("protects /metrics and /sse with the caller key too", async () => {
+  it("protects /metrics with the caller key too", async () => {
     expect((await fetch(`${base}/metrics`)).status).toBe(401);
-    expect((await fetch(`${base}/sse`)).status).toBe(401);
   });
 
   it("initializes a session and serves tools/list on it", async () => {

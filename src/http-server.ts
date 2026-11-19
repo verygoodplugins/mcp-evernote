@@ -1,5 +1,5 @@
 /**
- * Streamable HTTP (plus legacy SSE) transport for the Evernote MCP server.
+ * Streamable HTTP transport for the Evernote MCP server.
  *
  * One long-lived process serves every local client over HTTP instead of each
  * client spawning its own stdio instance, so all callers share one Evernote
@@ -12,8 +12,6 @@
  *
  * Endpoints:
  * - `POST|GET|DELETE /mcp` — MCP Streamable HTTP (stateful sessions).
- * - `GET /sse` + `POST /messages?sessionId=…` — deprecated HTTP+SSE transport
- *   for older clients.
  * - `GET /metrics` — queue metrics + session counts (authenticated).
  * - `GET /healthz` — liveness only, unauthenticated, no details.
  */
@@ -24,7 +22,6 @@ import type { AddressInfo } from "net";
 import express, { NextFunction, Request, Response } from "express";
 import type { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   hostHeaderValidation,
   localhostHostValidation,
@@ -64,13 +61,10 @@ export interface HttpServerOptions extends HttpConfig {
   logger?: (message: string) => void;
 }
 
-type Transport = StreamableHTTPServerTransport | SSEServerTransport;
-
 interface Session {
-  transport: Transport;
+  transport: StreamableHTTPServerTransport;
   server: McpServer;
   caller: string;
-  kind: "streamable" | "sse";
   lastSeen: number;
 }
 
@@ -238,7 +232,7 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     next();
   };
 
-  app.use(["/mcp", "/sse", "/messages", "/metrics"], requireCaller);
+  app.use(["/mcp", "/metrics"], requireCaller);
   app.use(express.json({ limit: MAX_BODY_SIZE }));
 
   const closeSession = async (id: string): Promise<void> => {
@@ -258,13 +252,12 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
   const getOwnedSession = (
     id: string | undefined,
     caller: string,
-    kind: Session["kind"],
   ): Session | undefined => {
     if (!id) {
       return undefined;
     }
     const session = sessions.get(id);
-    if (!session || session.caller !== caller || session.kind !== kind) {
+    if (!session || session.caller !== caller) {
       return undefined;
     }
     session.lastSeen = Date.now();
@@ -286,12 +279,12 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     const sessionId = req.header("mcp-session-id");
     try {
       if (sessionId) {
-        const session = getOwnedSession(sessionId, caller, "streamable");
+        const session = getOwnedSession(sessionId, caller);
         if (!session) {
           jsonRpcError(res, 404, "Session not found");
           return;
         }
-        await (session.transport as StreamableHTTPServerTransport).handleRequest(
+        await session.transport.handleRequest(
           req,
           res,
           req.body,
@@ -313,7 +306,6 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
             transport,
             server,
             caller,
-            kind: "streamable",
             lastSeen: Date.now(),
           });
           log(`[http] session ${id} opened by ${caller}`);
@@ -336,13 +328,13 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
 
   const handleSessionRequest = async (req: Request, res: Response) => {
     const caller: string = res.locals.caller;
-    const session = getOwnedSession(req.header("mcp-session-id"), caller, "streamable");
+    const session = getOwnedSession(req.header("mcp-session-id"), caller);
     if (!session) {
       jsonRpcError(res, req.header("mcp-session-id") ? 404 : 400, "Session not found");
       return;
     }
     try {
-      await (session.transport as StreamableHTTPServerTransport).handleRequest(req, res);
+      await session.transport.handleRequest(req, res);
     } catch (error) {
       log(`[http] ${req.method} /mcp failed: ${(error as Error).message}`);
       jsonRpcError(res, 500, "Internal server error");
@@ -351,56 +343,11 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
   app.get("/mcp", handleSessionRequest);
   app.delete("/mcp", handleSessionRequest);
 
-  // --- Legacy HTTP+SSE (deprecated MCP transport) ----------------------------
-
-  app.get("/sse", async (_req, res) => {
-    const caller: string = res.locals.caller;
-    if (atCapacity(res)) {
-      return;
-    }
-    try {
-      const transport = new SSEServerTransport("/messages", res);
-      const server = options.createServer();
-      const id = transport.sessionId;
-      sessions.set(id, { transport, server, caller, kind: "sse", lastSeen: Date.now() });
-      res.on("close", () => {
-        void closeSession(id);
-      });
-      log(`[http] SSE session ${id} opened by ${caller}`);
-      await server.connect(transport);
-    } catch (error) {
-      log(`[http] GET /sse failed: ${(error as Error).message}`);
-      jsonRpcError(res, 500, "Internal server error");
-    }
-  });
-
-  app.post("/messages", async (req, res) => {
-    const caller: string = res.locals.caller;
-    const id = typeof req.query.sessionId === "string" ? req.query.sessionId : undefined;
-    const session = getOwnedSession(id, caller, "sse");
-    if (!session) {
-      jsonRpcError(res, 404, "Session not found");
-      return;
-    }
-    try {
-      await (session.transport as SSEServerTransport).handlePostMessage(req, res, req.body);
-    } catch (error) {
-      log(`[http] POST /messages failed: ${(error as Error).message}`);
-      jsonRpcError(res, 500, "Internal server error");
-    }
-  });
-
   // --- Metrics ---------------------------------------------------------------
 
   app.get("/metrics", (_req, res) => {
-    let streamable = 0;
-    let sse = 0;
-    for (const session of sessions.values()) {
-      if (session.kind === "sse") sse++;
-      else streamable++;
-    }
     res.json({
-      sessions: { streamable, sse, max: options.maxSessions },
+      sessions: { streamable: sessions.size, max: options.maxSessions },
       ...(options.getMetrics ? { queue: options.getMetrics() } : {}),
     });
   });
@@ -423,7 +370,7 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     },
     sweepIdleSessions: async (now = Date.now()) => {
       const idle = [...sessions.entries()]
-        .filter(([, s]) => s.kind === "streamable" && now - s.lastSeen > options.sessionIdleMs)
+        .filter(([, s]) => now - s.lastSeen > options.sessionIdleMs)
         .map(([id]) => id);
       await Promise.all(idle.map((id) => closeSession(id)));
       if (idle.length) {
