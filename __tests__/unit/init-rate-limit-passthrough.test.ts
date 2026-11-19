@@ -8,7 +8,8 @@ import { RateLimitBackoffError } from '../../src/request-queue.js';
  * limit during (re)connect must bypass that wrapper so tool errors keep
  * errorCode / retryAfterSeconds (see PR #86 review).
  */
-const indexSource = readFileSync(resolve(import.meta.dirname, '../../src/index.ts'), 'utf-8');
+// Normalize CRLF: Windows CI checks out with autocrlf.
+const indexSource = readFileSync(resolve(import.meta.dirname, '../../src/index.ts'), 'utf-8').replace(/\r\n/g, '\n');
 
 describe('ensureAPI rate-limit passthrough', () => {
   it('rethrows rate-limit errors before wrapping init failures', () => {
