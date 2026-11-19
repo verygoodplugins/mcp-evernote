@@ -205,9 +205,10 @@ EVERNOTE_POLLING_ENABLED=true                                  # Auto-start poll
 EVERNOTE_POLL_INTERVAL=3600000                                 # 1 hour (min: 900000 = 15 min)
 EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for change notifications
 
-# Rate-limit transport (optional)
-EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous NoteStore RPCs (default: 3)
-EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS=15   # Auto-retry a rate-limited call once if the wait is <= this many seconds; 0 = off
+# Request queue / rate limits (optional)
+EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous Evernote RPCs through the shared queue (default: 3)
+EVERNOTE_MIN_REQUEST_INTERVAL_MS=0          # Minimum gap between RPC dispatches; 0 = no pacing (default: 0)
+EVERNOTE_RATE_LIMIT_AUTO_RETRY_SECONDS=15   # Shared backoffs <= this wait in the queue (failed call retried once); longer ones fail fast; 0 = always fail fast
 EVERNOTE_MAX_RESPONSE_CHARS=60000           # Total note-body chars per multi-note response; bodies past this are dropped with truncated:true
 
 # Note body cache (optional)
@@ -215,10 +216,16 @@ EVERNOTE_NOTE_CACHE_SIZE=200                 # Max notes held in the USN-keyed b
 EVERNOTE_NOTE_CACHE_SYNC_TTL_MS=30000        # How long a getSyncState result is trusted before re-checking for external edits
 ```
 
-On the hourly rate limit, tool errors return JSON with `error: "rate_limited"`
-and `retryAfterSeconds` (Evernote's exact backoff window). Bounding concurrency
-smooths bursts but cannot restore quota — the quota is a per-token hourly call
-count, so the durable fixes are fewer calls and honoring the backoff.
+Every Evernote call goes through one shared request queue per process. When
+any call hits `RATE_LIMIT_REACHED`, the whole queue backs off for Evernote's
+`rateLimitDuration` instead of each caller retrying on its own: short waits are
+waited out (the queue retries the failed call once), long waits fail fast. On a
+long wait, tool errors return JSON with `error: "rate_limited"` and
+`retryAfterSeconds` (the time left in Evernote's window). Queue depth, wait
+times and backoff state show up in `evernote_connection({action:"status"})`
+under `queue`. Bounding concurrency smooths bursts but cannot restore quota:
+the quota is a per-token hourly call count, so the durable fixes are fewer
+calls and honoring the backoff.
 
 Re-reading the same notes is served from an in-memory, USN-keyed body cache
 instead of re-spending `getNote` calls — the direct fix for the hourly limit
@@ -309,6 +316,45 @@ mcp-evernote-auth
 ```
 
 </details>
+
+## HTTP Server Mode (One Shared Instance)
+
+By default every client spawns its own stdio process. HTTP mode runs **one**
+long-lived server that all local clients connect to over MCP Streamable HTTP,
+so they share one Evernote client, one auth session and one request queue.
+That doesn't raise Evernote's rate limit; it stops separate processes from
+compounding retries against the same quota.
+
+```bash
+EVERNOTE_HTTP_CALLER_KEYS="hub:$(openssl rand -hex 24),cursor:$(openssl rand -hex 24)" \
+EVERNOTE_CONSUMER_KEY=your-key EVERNOTE_CONSUMER_SECRET=your-secret \
+EVERNOTE_ACCESS_TOKEN=your-token \
+npx -y -p @verygoodplugins/mcp-evernote mcp-evernote-http
+# or: mcp-evernote --http, EVERNOTE_TRANSPORT=http, npm run start:http
+```
+
+Clients connect to `http://127.0.0.1:3100/mcp` with
+`Authorization: Bearer <key>`. For example, in Claude Code:
+
+```bash
+claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
+  --header "Authorization: Bearer <key>"
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EVERNOTE_HTTP_HOST` | `127.0.0.1` | Bind address |
+| `EVERNOTE_HTTP_PORT` | `3100` | Port |
+| `EVERNOTE_HTTP_CALLER_KEYS` | (required) | Comma-separated `name:key` pairs. The name shows up in logs, and a session can only be used by the caller that opened it |
+| `EVERNOTE_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Allow no keys. Only honored on a loopback host |
+| `EVERNOTE_HTTP_ALLOWED_HOSTS` | (unset) | Comma-separated `Host` header allow-list (DNS rebinding protection). Loopback hosts get it automatically |
+| `EVERNOTE_HTTP_SESSION_IDLE_MS` | `1800000` | Close sessions idle this long |
+| `EVERNOTE_HTTP_MAX_SESSIONS` | `64` | Max open sessions |
+
+Endpoints: `/mcp` (Streamable HTTP), `/sse` + `/messages` (the deprecated
+HTTP+SSE transport, for older clients), `/metrics` (queue + session counts,
+needs a key), `/healthz` (liveness, no key). Local file paths in tools like
+`evernote_add_resource_to_note` resolve on the machine running the server.
 
 ## Cookie-Based Authentication (No API Key Needed)
 
