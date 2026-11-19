@@ -73,6 +73,7 @@
     "dotenv": "^18.0.9",
     "evernote": "^2.0.5",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.5",
     "marked": "^12.0.2",
     "mime-types": "^3.0.2",
     "node-fetch": "^3.3.2",

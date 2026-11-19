@@ -230,6 +230,7 @@ fallbacks in code.
 | `EVERNOTE_HTTP_ALLOW_UNAUTHENTICATED` | `false` | `src/http-server.ts` | Allow no keys; refused unless the host is loopback |
 | `EVERNOTE_HTTP_ALLOWED_HOSTS` | — | `src/http-server.ts` | `Host` header allow-list (DNS rebinding protection; automatic on loopback) |
 | `EVERNOTE_HTTP_SESSION_IDLE_MS` / `EVERNOTE_HTTP_MAX_SESSIONS` | `1800000` / `64` | `src/http-server.ts` | Idle-session sweep and session cap |
+| `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | `src/http-server.ts` | Per-credential rate limit on `/mcp` and `/metrics` (express-rate-limit, keyed by a digest of the Authorization header) |
 | `EVERNOTE_MAX_RESPONSE_CHARS` | `60000` | `src/index.ts` | Total note-body character budget per multi-note response (`get_note` batch, `search_notes` with `includeContent`); bodies past the budget are dropped with `truncated: true` + original `contentLength` (see `src/response-budget.ts`). Keeps responses under the ~25k-token MCP cap |
 | `EVERNOTE_NOTE_CACHE_SIZE` | `200` | `src/index.ts` | Max notes held in the per-instance USN-keyed body cache (`src/note-cache.ts`); `0` disables it. Re-reading unchanged notes is served from memory instead of re-spending a `getNote` quota call |
 | `EVERNOTE_NOTE_CACHE_SYNC_TTL_MS` | `30000` | `src/index.ts` | How long a `getSyncState` result is trusted before the cache re-probes for external edits. Bounds the staleness window for edits made elsewhere; own writes evict immediately |

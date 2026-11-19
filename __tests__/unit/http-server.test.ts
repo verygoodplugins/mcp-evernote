@@ -9,6 +9,7 @@ import {
   RunningHttpServer,
   DEFAULT_HTTP_HOST,
   DEFAULT_HTTP_PORT,
+  DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE,
 } from "../../src/http-server.js";
 
 describe("parseCallerKeys", () => {
@@ -82,6 +83,67 @@ describe("authenticateCaller", () => {
     expect(authenticateCaller("Basic secret-1", keys)).toBeNull();
     expect(authenticateCaller("Bearer secret-", keys)).toBeNull();
     expect(authenticateCaller("Bearer secret-1", [])).toBeNull();
+    expect(authenticateCaller("Bearer", keys)).toBeNull();
+    expect(authenticateCaller("Bearer   ", keys)).toBeNull();
+    expect(authenticateCaller("Bearersecret-1", keys)).toBeNull();
+    expect(authenticateCaller(`Bearer ${"x".repeat(5000)}`, keys)).toBeNull();
+  });
+
+  it("accepts a tab separator", () => {
+    expect(authenticateCaller("Bearer\tsecret-1", keys)?.name).toBe("hub");
+  });
+
+  it("parses pathological whitespace in linear time (no ReDoS)", () => {
+    const hostile = `bearer ${" ".repeat(4000)}x`;
+    const started = Date.now();
+    for (let i = 0; i < 50; i++) {
+      authenticateCaller(hostile, keys);
+    }
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
+describe("resolveHttpConfig rate limit", () => {
+  const base = { EVERNOTE_HTTP_CALLER_KEYS: "hub:k" };
+
+  it("defaults to DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE", () => {
+    expect(resolveHttpConfig(base).rateLimitPerMinute).toBe(DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE);
+  });
+
+  it("reads EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE", () => {
+    expect(
+      resolveHttpConfig({ ...base, EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE: "30" }).rateLimitPerMinute,
+    ).toBe(30);
+  });
+});
+
+describe("HTTP rate limiting", () => {
+  it("returns 429 per credential once the per-minute limit is hit", async () => {
+    const running = await startHttpServer({
+      host: "127.0.0.1",
+      port: 0,
+      callerKeys: parseCallerKeys("hub:hub-key,cursor:cursor-key"),
+      allowUnauthenticated: false,
+      sessionIdleMs: 60_000,
+      maxSessions: 4,
+      rateLimitPerMinute: 2,
+      createServer: () => new Server({ name: "stub", version: "0.0.0" }, { capabilities: {} }),
+      getMetrics: () => ({}),
+      logger: () => {},
+    });
+    try {
+      const metrics = running.url.replace(/\/mcp$/, "/metrics");
+      const get = (key: string) => fetch(metrics, { headers: { authorization: `Bearer ${key}` } });
+      expect((await get("hub-key")).status).toBe(200);
+      expect((await get("hub-key")).status).toBe(200);
+      const limited = await get("hub-key");
+      expect(limited.status).toBe(429);
+      expect((await limited.json()).error.message).toMatch(/Too many requests/);
+      // A different credential has its own bucket.
+      expect((await get("cursor-key")).status).toBe(200);
+    } finally {
+      await running.close();
+    }
   });
 });
 

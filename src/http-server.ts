@@ -14,12 +14,16 @@
  * - `POST|GET|DELETE /mcp` — MCP Streamable HTTP (stateful sessions).
  * - `GET /metrics` — queue metrics + session counts (authenticated).
  * - `GET /healthz` — liveness only, unauthenticated, no details.
+ *
+ * `/mcp` and `/metrics` are rate limited per presented credential before the
+ * caller key is checked (`EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE`, default 600).
  */
 
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import type { Server as HttpServer } from "http";
 import type { AddressInfo } from "net";
 import express, { NextFunction, Request, Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import type { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -32,6 +36,9 @@ export const DEFAULT_HTTP_HOST = "127.0.0.1";
 export const DEFAULT_HTTP_PORT = 3100;
 export const DEFAULT_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_HTTP_MAX_SESSIONS = 64;
+export const DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE = 600;
+/** Longest Authorization header we bother parsing. */
+const MAX_AUTHORIZATION_LENGTH = 4096;
 const MAX_BODY_SIZE = "10mb";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -51,6 +58,8 @@ export interface HttpConfig {
   allowedHosts?: string[];
   sessionIdleMs: number;
   maxSessions: number;
+  /** Requests per minute per presented credential on /mcp and /metrics. */
+  rateLimitPerMinute?: number;
 }
 
 export interface HttpServerOptions extends HttpConfig {
@@ -147,6 +156,10 @@ export function resolveHttpConfig(env: NodeJS.ProcessEnv): HttpConfig {
       env.EVERNOTE_HTTP_MAX_SESSIONS,
       DEFAULT_HTTP_MAX_SESSIONS,
     ),
+    rateLimitPerMinute: parsePositiveInt(
+      env.EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE,
+      DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE,
+    ),
   };
 }
 
@@ -163,11 +176,22 @@ export function authenticateCaller(
   authorization: string | undefined,
   callerKeys: CallerKey[],
 ): CallerKey | null {
-  const match = /^Bearer\s+(.+)$/i.exec(authorization?.trim() ?? "");
-  if (!match) {
+  // Parsed without a regex: a backtracking pattern on this header is a ReDoS
+  // vector (CodeQL js/polynomial-redos).
+  if (!authorization || authorization.length > MAX_AUTHORIZATION_LENGTH) {
     return null;
   }
-  const presented = digest(match[1].trim());
+  const header = authorization.trim();
+  const scheme = header.slice(0, 6).toLowerCase();
+  const separator = header.charAt(6);
+  if (scheme !== "bearer" || (separator !== " " && separator !== "\t")) {
+    return null;
+  }
+  const token = header.slice(7).trim();
+  if (!token) {
+    return null;
+  }
+  const presented = digest(token);
   let found: CallerKey | null = null;
   for (const caller of callerKeys) {
     // No early exit: every key is compared on every request.
@@ -232,7 +256,24 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     next();
   };
 
-  app.use(["/mcp", "/metrics"], requireCaller);
+  // Keyed by a digest of the presented Authorization header rather than the
+  // client IP: behind the hub proxy every caller shares 127.0.0.1, and keying
+  // by credential keeps one noisy (or unauthenticated) client from starving the
+  // others. Caller keys are high-entropy, so this is about abuse, not guessing.
+  const limiter = rateLimit({
+    windowMs: 60_000,
+    limit: options.rateLimitPerMinute ?? DEFAULT_HTTP_RATE_LIMIT_PER_MINUTE,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+      digest(String(req.headers.authorization ?? "")).toString("hex"),
+    validate: false,
+    handler: (_req, res) => {
+      jsonRpcError(res, 429, "Too many requests; slow down and retry");
+    },
+  });
+
+  app.use(["/mcp", "/metrics"], limiter, requireCaller);
   app.use(express.json({ limit: MAX_BODY_SIZE }));
 
   const closeSession = async (id: string): Promise<void> => {
