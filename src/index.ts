@@ -15,6 +15,15 @@ import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
 import { resolveToolAlias } from "./tool-aliases.js";
+import {
+  applyDestructiveGate,
+  destructiveCallError,
+  findNotebookByName,
+  isDestructiveEnabled,
+  pageTags,
+  unknownNotebookMessage,
+  wantsTagPage,
+} from "./tool-guards.js";
 import { computeWebhookSignature } from "./webhook.js";
 import {
   buildToolErrorPayload,
@@ -114,6 +123,9 @@ const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
 // clients during the deprecation window. Retired names always stay callable via
 // TOOL_ALIASES regardless of this flag — it only controls visibility.
 const LEGACY_TOOLS_ENABLED = process.env.EVERNOTE_LEGACY_TOOLS === "true";
+// Trash/restore (delete_note) and token revocation (connection action:"revoke")
+// are only advertised and callable when EVERNOTE_ENABLE_DESTRUCTIVE=true.
+const DESTRUCTIVE_TOOLS_ENABLED = isDestructiveEnabled();
 
 // Evernote RPC queue tuning. Bounding concurrency keeps a wide fan-out from
 // bursting past Evernote's hourly rate limit; pacing spaces dispatches; short
@@ -677,7 +689,13 @@ const tools: Tool[] = [
         },
         notebookName: {
           type: "string",
-          description: "Name of the notebook to create the note in (optional)",
+          description:
+            "Name of an existing notebook (optional). Unknown names are rejected with close matches unless createNotebook is true.",
+        },
+        createNotebook: {
+          type: "boolean",
+          description: "Create notebookName if it does not exist (default: false).",
+          default: false,
         },
         tags: {
           type: "array",
@@ -838,7 +856,13 @@ const tools: Tool[] = [
         },
         notebookName: {
           type: "string",
-          description: "Move the note(s) to this notebook",
+          description:
+            "Move the note(s) to this existing notebook. Unknown names are rejected with close matches unless createNotebook is true.",
+        },
+        createNotebook: {
+          type: "boolean",
+          description: "Create notebookName if it does not exist (default: false).",
+          default: false,
         },
         tags: {
           type: "array",
@@ -980,7 +1004,9 @@ const tools: Tool[] = [
       openWorldHint: true,
     },
     description:
-      "List all tags, or get one tag's full detail by passing its name or guid.",
+      "List tags, or get one tag's full detail by name or guid. " +
+      "query/limit/offset filter and page the list, returning { total, hasMore, nextOffset, tags }; " +
+      "with none of them the full tag array is returned.",
     inputSchema: {
       type: "object",
       properties: {
@@ -991,6 +1017,18 @@ const tools: Tool[] = [
         guid: {
           type: "string",
           description: "If set, return just this tag (looked up by GUID).",
+        },
+        query: {
+          type: "string",
+          description: "Case-insensitive substring filter on tag names.",
+        },
+        limit: {
+          type: "number",
+          description: "Max tags per page (1-1000). Default: all matches.",
+        },
+        offset: {
+          type: "number",
+          description: "Tags to skip (default: 0). Use nextOffset to page.",
         },
       },
     },
@@ -1465,7 +1503,10 @@ async function handleListTools() {
     logError: (message) => console.error(message),
   });
 
-  const advertised = LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools;
+  const advertised = applyDestructiveGate(
+    LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools,
+    DESTRUCTIVE_TOOLS_ENABLED,
+  );
   return { tools: enrichToolsWithNotebookDescriptions(advertised, notebookCache) };
 }
 
@@ -1481,6 +1522,39 @@ function warnDeprecatedAlias(oldName: string, canonical: string): void {
   );
 }
 
+/**
+ * Resolve a target notebook by name for create/move. Unknown names are
+ * rejected with close matches unless createNotebook is true — a typo must
+ * never silently create a new notebook.
+ */
+async function resolveTargetNotebook(
+  evernoteApi: EvernoteAPI,
+  notebookName: string,
+  createNotebook: boolean,
+): Promise<{ guid: string | undefined; warning?: string }> {
+  const notebooks = await evernoteApi.listNotebooks();
+  notebookCache = notebooks;
+  const { notebook, suggestions } = findNotebookByName(notebooks, notebookName);
+  if (notebook) {
+    return { guid: notebook.guid };
+  }
+  if (!createNotebook) {
+    throw new Error(unknownNotebookMessage(notebookName, suggestions));
+  }
+  try {
+    const created = await evernoteApi.createNotebook(notebookName);
+    clearEntityCaches();
+    return {
+      guid: created.guid,
+      warning: `Notebook "${notebookName}" did not exist and was created (createNotebook: true).`,
+    };
+  } catch (createError) {
+    throw new Error(
+      `Notebook "${notebookName}" does not exist and could not be created (${errorMessage(createError)})`,
+    );
+  }
+}
+
 // Call tool handler
 async function handleCallTool(request: CallToolRequest): Promise<any> {
   // Resolve a possibly-retired tool name to its canonical form BEFORE
@@ -1491,6 +1565,20 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
   const args = resolved.args;
   if (resolved.aliased) {
     warnDeprecatedAlias(request.params.name, name);
+  }
+
+  // Destructive operations are opt-in (EVERNOTE_ENABLE_DESTRUCTIVE=true).
+  const gateError = destructiveCallError(
+    name,
+    args,
+    DESTRUCTIVE_TOOLS_ENABLED,
+    request.params.name,
+  );
+  if (gateError) {
+    return {
+      content: [{ type: "text", text: gateError }],
+      isError: true,
+    };
   }
 
   // Legacy input guard: preserve a retired tool's stricter "at least one of"
@@ -1822,35 +1910,19 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
     switch (name) {
       case "evernote_create_note": {
-        const { title, content, notebookName, tags } = validatedArgs;
+        const { title, content, notebookName, createNotebook, tags } =
+          validatedArgs;
 
         let notebookGuid: string | undefined;
         let notebookWarning: string | undefined;
 
         if (notebookName) {
-          const notebooks = await evernoteApi.listNotebooks();
-          notebookCache = notebooks;
-          const notebook = notebooks.find((nb) => nb.name === notebookName);
-          if (notebook) {
-            notebookGuid = notebook.guid;
-          } else {
-            // Notebook doesn't exist — auto-create it
-            try {
-              const newNotebook =
-                await evernoteApi.createNotebook(notebookName);
-              notebookGuid = newNotebook.guid;
-              notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-              clearEntityCaches();
-            } catch (createError) {
-              // Auto-create failed — fall back to the default notebook
-              const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
-              notebookGuid = defaultNb?.guid;
-              const fallbackName = defaultNb?.name || "the default notebook";
-              notebookWarning =
-                `Notebook "${notebookName}" does not exist and could not be auto-created ` +
-                `(${errorMessage(createError)}). Note was placed in "${fallbackName}" instead.`;
-            }
-          }
+          ({ guid: notebookGuid, warning: notebookWarning } =
+            await resolveTargetNotebook(
+              evernoteApi,
+              notebookName,
+              createNotebook,
+            ));
         }
 
         const note = await evernoteApi.createNote({
@@ -2216,12 +2288,9 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
                   r.guid,
                   r,
                 );
+                // attachmentText only: the legacy pdfText/ocrText mirrors
+                // doubled the payload (removed as a breaking change).
                 resourceInfo.attachmentText = attachmentText;
-                if (r.mime === "application/pdf") {
-                  resourceInfo.pdfText = attachmentText;
-                } else {
-                  resourceInfo.ocrText = attachmentText;
-                }
               } catch (error) {
                 const meta = getEvernoteErrorMeta(error);
                 if (isAuthFailure(error) || meta.errorCode === 19) {
@@ -2255,6 +2324,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           title,
           content,
           notebookName,
+          createNotebook = false,
           tags,
           addTags,
           removeTags,
@@ -2293,6 +2363,17 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           };
         }
 
+        // Resolve the target notebook up front, before any write (including
+        // addTags creating tags), so an unknown name fails cleanly.
+        const targetNotebook =
+          notebookName !== undefined
+            ? await resolveTargetNotebook(
+                evernoteApi,
+                notebookName,
+                createNotebook,
+              )
+            : undefined;
+
         // Batch move / additive tags, or a single-note metadata-only edit
         // (no title/content/replace-all tags/forceUpdate). Resolves the
         // official move_notes and update_note_tags tools onto update_note.
@@ -2306,30 +2387,8 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             removeTags !== undefined);
         if (guids || isMetadataOnly) {
           const ids: string[] = guids ?? [guid];
-          let targetNotebookGuid: string | undefined;
-          let notebookWarning: string | undefined;
-          if (notebookName !== undefined) {
-            const notebooks = await evernoteApi.listNotebooks();
-            notebookCache = notebooks;
-            const notebook = notebooks.find((nb) => nb.name === notebookName);
-            if (notebook) {
-              targetNotebookGuid = notebook.guid;
-            } else if (guids) {
-              throw new Error(`Notebook '${notebookName}' not found`);
-            } else {
-              // Preserve auto-create for single-note moves (full-update path).
-              try {
-                const created = await evernoteApi.createNotebook(notebookName);
-                targetNotebookGuid = created.guid;
-                notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-                clearEntityCaches();
-              } catch (createError) {
-                throw new Error(
-                  `Notebook "${notebookName}" does not exist and could not be auto-created (${errorMessage(createError)})`,
-                );
-              }
-            }
-          }
+          const targetNotebookGuid = targetNotebook?.guid;
+          const notebookWarning = targetNotebook?.warning;
           let result;
           try {
             result = await evernoteApi.updateNotesMetadata({
@@ -2418,31 +2477,10 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             }
           }
 
-          let notebookWarning: string | undefined;
-          if (notebookName !== undefined) {
-            const notebooks = await evernoteApi.listNotebooks();
-            notebookCache = notebooks;
-            const notebook = notebooks.find((nb) => nb.name === notebookName);
-            if (notebook) {
-              note.notebookGuid = notebook.guid;
-            } else {
-              // Auto-create the notebook
-              try {
-                const newNotebook =
-                  await evernoteApi.createNotebook(notebookName);
-                note.notebookGuid = newNotebook.guid;
-                notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-                clearEntityCaches();
-              } catch (createError) {
-                const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
-                note.notebookGuid = defaultNb?.guid;
-                const fallbackName = defaultNb?.name || "the default notebook";
-                notebookWarning =
-                  `Notebook "${notebookName}" does not exist and could not be auto-created ` +
-                  `(${errorMessage(createError)}). Note was moved to "${fallbackName}" instead.`;
-              }
-            }
-            forceUpdateNotebookGuid = note.notebookGuid;
+          const notebookWarning = targetNotebook?.warning;
+          if (targetNotebook) {
+            note.notebookGuid = targetNotebook.guid;
+            forceUpdateNotebookGuid = targetNotebook.guid;
           }
 
           const updatedNote = await evernoteApi.updateNote(note);
@@ -2589,7 +2627,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_list_tags": {
-        const { name, guid } = validatedArgs;
+        const { name, guid, query, limit, offset } = validatedArgs;
 
         // Single-tag lookup when name/guid is given (absorbs get_tag).
         if (name || guid) {
@@ -2610,11 +2648,15 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
         }
 
         const tags = await getCachedTags(evernoteApi);
+        const pageOptions = { query, limit, offset };
+        const payload = wantsTagPage(pageOptions)
+          ? pageTags(tags, pageOptions)
+          : tags;
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(tags, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };

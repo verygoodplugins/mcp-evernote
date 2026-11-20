@@ -10,7 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 // Exercise the built MCP dispatcher; mock only the upstream Evernote API.
 const require = createRequire(import.meta.url);
-async function withServer(errorCode, run) {
+async function withServer(errorCode, run, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), "evernote-connection-"));
   const preload = join(dir, "evernote.cjs");
   await writeFile(
@@ -20,7 +20,7 @@ const Evernote = require(${JSON.stringify(require.resolve("evernote"))});
 const reject = async () => { throw {errorCode: ${errorCode}, parameter: 'authenticationToken'}; };
 Evernote.Client = class {
   getUserStore() { return {getUser: ${errorCode ? "reject" : 'async () => ({id: 1, username: "test"})'}}; }
-  getNoteStore() { return {listNotebooks: async () => [], findNotesMetadata: reject}; }
+  getNoteStore() { return ${options.noteStore || "{listNotebooks: async () => [], findNotesMetadata: reject}"}; }
 };
 `,
   );
@@ -38,6 +38,7 @@ Evernote.Client = class {
       EVERNOTE_ACCESS_TOKEN: "test-token",
       EVERNOTE_NOTESTORE_URL: "https://example.com/notestore",
       EVERNOTE_POLLING_ENABLED: "false",
+      ...options.env,
     },
     stderr: "pipe",
   });
@@ -101,4 +102,123 @@ test("valid credentials: cold status and reconnect succeed after API verificatio
     assert.ok(!result.isError);
     assert.match(result.content[0].text, /Successfully reconnected/);
   });
+});
+
+// Guardrail regressions through the real dispatcher (ListTools + CallTool).
+const guardNoteStore = `{
+  listNotebooks: async () => [
+    {guid: "nb1", name: "Meetings", defaultNotebook: true},
+    {guid: "nb2", name: "Music"},
+  ],
+  createNotebook: async (nb) => ({...nb, guid: "nb-new"}),
+  listTags: async () => ["todo", "to-do", "WP Fusion", "wp-fusion", "autojack"].map(
+    (name, i) => ({guid: "t" + i, name}),
+  ),
+  createNote: async (n) => ({...n, guid: "n-new"}),
+  findNotesMetadata: async () => ({totalNotes: 0, notes: []}),
+}`;
+
+test("destructive tools are hidden and refused unless EVERNOTE_ENABLE_DESTRUCTIVE=true", async () => {
+  await withServer(
+    0,
+    async (client) => {
+      const { tools } = await client.listTools();
+      const names = tools.map((t) => t.name);
+      assert.ok(!names.includes("evernote_delete_note"));
+      assert.ok(!names.includes("evernote_revoke_auth"));
+      const connection = tools.find((t) => t.name === "evernote_connection");
+      assert.deepEqual(connection.inputSchema.properties.action.enum, [
+        "status",
+        "user",
+        "reconnect",
+      ]);
+      assert.equal(connection.annotations.destructiveHint, false);
+
+      for (const [name, args] of [
+        ["evernote_delete_note", { guid: "n1" }],
+        ["evernote_revoke_auth", {}],
+        ["evernote_connection", { action: "revoke" }],
+      ]) {
+        const result = await call(client, name, args);
+        assert.equal(result.isError, true, name);
+        assert.match(result.content[0].text, /EVERNOTE_ENABLE_DESTRUCTIVE=true/);
+      }
+    },
+    { noteStore: guardNoteStore },
+  );
+});
+
+test("destructive tools are advertised when EVERNOTE_ENABLE_DESTRUCTIVE=true", async () => {
+  await withServer(
+    0,
+    async (client) => {
+      const { tools } = await client.listTools();
+      assert.ok(tools.some((t) => t.name === "evernote_delete_note"));
+      const connection = tools.find((t) => t.name === "evernote_connection");
+      assert.ok(connection.inputSchema.properties.action.enum.includes("revoke"));
+      assert.equal(connection.annotations.destructiveHint, true);
+    },
+    { noteStore: guardNoteStore, env: { EVERNOTE_ENABLE_DESTRUCTIVE: "true" } },
+  );
+});
+
+test("unknown notebook names are rejected with close matches unless createNotebook is true", async () => {
+  await withServer(
+    0,
+    async (client) => {
+      const typo = await call(client, "evernote_create_note", {
+        title: "t",
+        content: "c",
+        notebookName: "Meetngs",
+      });
+      assert.equal(typo.isError, true);
+      assert.match(body(typo).message, /Notebook "Meetngs" not found\. Did you mean: "Meetings"\?/);
+
+      const move = await call(client, "evernote_update_note", {
+        guids: ["a", "b"],
+        notebookName: "Muzic",
+      });
+      assert.equal(move.isError, true);
+      assert.match(body(move).message, /Did you mean: "Music"/);
+
+      const folded = await call(client, "evernote_create_note", {
+        title: "t",
+        content: "c",
+        notebookName: "music",
+      });
+      assert.ok(!folded.isError, folded.content[0].text);
+      assert.ok(!folded.content[0].text.includes("did not exist"));
+
+      const created = await call(client, "evernote_create_note", {
+        title: "t",
+        content: "c",
+        notebookName: "Brand New",
+        createNotebook: true,
+      });
+      assert.ok(!created.isError, created.content[0].text);
+      assert.match(created.content[0].text, /was created \(createNotebook: true\)/);
+    },
+    { noteStore: guardNoteStore },
+  );
+});
+
+test("list_tags pages and filters, and stays a plain array without paging params", async () => {
+  await withServer(
+    0,
+    async (client) => {
+      const all = body(await call(client, "evernote_list_tags", {}));
+      assert.ok(Array.isArray(all));
+      assert.equal(all.length, 5);
+
+      const filtered = body(await call(client, "evernote_list_tags", { query: "WP" }));
+      assert.equal(filtered.total, 2);
+      assert.deepEqual(filtered.tags.map((t) => t.name), ["WP Fusion", "wp-fusion"]);
+
+      const page = body(await call(client, "evernote_list_tags", { limit: 2, offset: 2 }));
+      assert.equal(page.total, 5);
+      assert.equal(page.returned, 2);
+      assert.equal(page.nextOffset, 4);
+    },
+    { noteStore: guardNoteStore },
+  );
 });

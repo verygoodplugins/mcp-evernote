@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { DESTRUCTIVE_TOOL_NAMES } from "../../src/tool-guards.js";
 
 const MAX_DESCRIPTION_CHARS = 300;
 
@@ -244,6 +245,41 @@ describe("advertised tool design", () => {
       readOnlyHint: false,
       destructiveHint: true,
     });
+  });
+});
+
+describe("destructive gate coverage", () => {
+  const source = readFileSync(
+    resolve(import.meta.dirname, "../../src/index.ts"),
+    "utf-8",
+  ).replace(/\r\n/g, "\n");
+  const tools = parseToolsArray(source, "const tools: Tool[] = [");
+  const legacy = parseToolsArray(source, "const legacyTools: Tool[] = [");
+
+  it("gates every destructive tool except update_note (forceUpdate needs a confirmation string) and connection (revoke action is gated)", () => {
+    const destructive = [...tools, ...legacy]
+      .filter((tool) => tool.annotations.destructiveHint)
+      .map((tool) => tool.name)
+      .filter((name) => name !== "evernote_update_note" && name !== "evernote_connection");
+    expect(destructive.sort()).toEqual([...DESTRUCTIVE_TOOL_NAMES].sort());
+  });
+
+  it("applies the gate to ListTools and CallTool", () => {
+    expect(source).toMatch(/applyDestructiveGate\(/);
+    expect(source).toMatch(/destructiveCallError\(/);
+  });
+});
+
+describe("get_note attachment text", () => {
+  const source = readFileSync(
+    resolve(import.meta.dirname, "../../src/index.ts"),
+    "utf-8",
+  ).replace(/\r\n/g, "\n");
+
+  it("returns attachmentText only, without the legacy pdfText/ocrText mirrors", () => {
+    expect(source).toMatch(/resourceInfo\.attachmentText = attachmentText;/);
+    expect(source).not.toMatch(/resourceInfo\.pdfText/);
+    expect(source).not.toMatch(/resourceInfo\.ocrText/);
   });
 });
 

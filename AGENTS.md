@@ -161,6 +161,20 @@ deprecation notice. They are hidden from `ListTools` by default; set
 `EVERNOTE_LEGACY_TOOLS=true` to re-advertise them during a migration window.
 See `MIGRATION.md` for the full old→new mapping.
 
+**Agent guardrails** (pure helpers in `src/tool-guards.ts`, unit tested):
+- Destructive operations are opt-in. `delete_note`, `connection`
+  `action:"revoke"`, and the `revoke_auth` alias are removed from `ListTools`
+  and refused by `CallTool` unless `EVERNOTE_ENABLE_DESTRUCTIVE=true`
+  (`applyDestructiveGate` / `destructiveCallError`), so the default surface is
+  14 tools and `connection` is advertised non-destructive.
+- Notebook names on `create_note` / `update_note` must exist (exact, then
+  unique case-insensitive match). Unknown names fail with close matches unless
+  `createNotebook: true`; resolution happens before any write.
+- `list_tags` takes `query` / `limit` / `offset` and then returns
+  `{ total, hasMore, nextOffset, tags }`; with none it returns the plain array.
+- `get_note` returns extracted attachment text only as
+  `resources[].attachmentText` (no `pdfText` / `ocrText` duplicates).
+
 Many tools accept user-friendly names but resolve to Evernote GUIDs
 internally (notebook names → GUIDs via `listNotebooks()`, tag names → GUIDs
 via `listTags()`, including hierarchical parent-tag resolution).

@@ -44,6 +44,27 @@ describe('tool schemas (M1)', () => {
       });
       expect(result.tags).toEqual(['a', 'b']);
     });
+
+    it('defaults createNotebook to false', () => {
+      const result = CreateNoteSchema.parse({ title: 'T', content: 'c', notebookName: 'Work' });
+      expect(result.createNotebook).toBe(false);
+    });
+
+    it('accepts createNotebook with notebookName', () => {
+      const result = CreateNoteSchema.parse({
+        title: 'T',
+        content: 'c',
+        notebookName: 'New',
+        createNotebook: true,
+      });
+      expect(result.createNotebook).toBe(true);
+    });
+
+    it('rejects createNotebook without notebookName', () => {
+      expect(() =>
+        CreateNoteSchema.parse({ title: 'T', content: 'c', createNotebook: true }),
+      ).toThrow(/createNotebook requires notebookName/);
+    });
   });
 
   describe('SearchNotesSchema', () => {
@@ -238,6 +259,28 @@ describe('tool schemas (M1)', () => {
     it('accepts name only (single lookup)', () => {
       expect(ListTagsSchema.parse({ name: 'important' }).name).toBe('important');
     });
+
+    it('accepts query, limit, and offset', () => {
+      expect(ListTagsSchema.parse({ query: 'wp', limit: 50, offset: 100 })).toEqual({
+        query: 'wp',
+        limit: 50,
+        offset: 100,
+      });
+    });
+
+    it('rejects out-of-range paging and empty queries', () => {
+      expect(() => ListTagsSchema.parse({ limit: 0 })).toThrow();
+      expect(() => ListTagsSchema.parse({ limit: 1001 })).toThrow();
+      expect(() => ListTagsSchema.parse({ offset: -1 })).toThrow();
+      expect(() => ListTagsSchema.parse({ limit: 1.5 })).toThrow();
+      expect(() => ListTagsSchema.parse({ query: '  ' })).toThrow(/query must not be empty/);
+    });
+
+    it('rejects mixing single-tag lookup with paging', () => {
+      expect(() => ListTagsSchema.parse({ name: 'x', limit: 5 })).toThrow(
+        /cannot be combined with query, limit, or offset/,
+      );
+    });
   });
 
   describe('AddResourceToNoteSchema', () => {
@@ -358,6 +401,22 @@ describe('tool schemas (M1)', () => {
 
     it('rejects a missing action', () => {
       expect(() => PollingSchema.parse({})).toThrow();
+    });
+  });
+
+  describe('UpdateNoteSchema createNotebook', () => {
+    it('defaults createNotebook to false and allows it on batch moves', () => {
+      expect(UpdateNoteSchema.parse({ guid: 'n1', notebookName: 'Work' }).createNotebook).toBe(false);
+      expect(
+        UpdateNoteSchema.parse({ guids: ['a', 'b'], notebookName: 'New', createNotebook: true })
+          .createNotebook,
+      ).toBe(true);
+    });
+
+    it('rejects createNotebook without notebookName', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({ guid: 'n1', title: 'x', createNotebook: true }),
+      ).toThrow(/createNotebook requires notebookName/);
     });
   });
 

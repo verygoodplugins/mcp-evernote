@@ -4,7 +4,11 @@ export const CreateNoteSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   content: z.string(),
   notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
+  createNotebook: z.boolean().optional().default(false),
   tags: z.array(z.string()).optional(),
+}).refine(data => !data.createNotebook || data.notebookName !== undefined, {
+  message: 'createNotebook requires notebookName',
+  path: ['createNotebook'],
 });
 
 const NoteFormatSchema = z.enum(['markdown', 'text', 'enml']);
@@ -58,6 +62,7 @@ export const UpdateNoteSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
   notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
+  createNotebook: z.boolean().optional().default(false),
   tags: z.array(z.string()).optional(),
   addTags: z.array(z.string().min(1)).min(1).optional(),
   removeTags: z.array(z.string().min(1)).min(1).optional(),
@@ -81,6 +86,13 @@ export const UpdateNoteSchema = z.object({
       path: ['forceUpdateConfirmation'],
       message:
         'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
+    });
+  }
+  if (data.createNotebook && data.notebookName === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['createNotebook'],
+      message: 'createNotebook requires notebookName',
     });
   }
   const hasAdditiveTags =
@@ -231,10 +243,23 @@ export const UpdateNotebookSchema = z.object({
 // list_tags lists all tags, or returns one (fresh, full detail) when name or
 // guid is given — absorbing the retired get_tag. name/guid must be non-empty
 // when present so an empty-string lookup errors instead of silently listing all.
+// query/limit/offset switch the list to a filtered, paged { total, tags } shape;
+// with none of them the plain full array is returned (backward compatible).
 export const ListTagsSchema = z.object({
   name: z.string().min(1, 'name must not be empty').optional(),
   guid: z.string().min(1, 'guid must not be empty').optional(),
-});
+  query: z.string().trim().min(1, 'query must not be empty').optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+  offset: z.number().int().min(0).optional(),
+}).refine(
+  data =>
+    !(data.name || data.guid) ||
+    (data.query === undefined && data.limit === undefined && data.offset === undefined),
+  {
+    message: 'name/guid (single-tag lookup) cannot be combined with query, limit, or offset',
+    path: ['query'],
+  },
+);
 
 export const UpdateTagSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),

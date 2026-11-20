@@ -203,6 +203,9 @@ EVERNOTE_POLLING_ENABLED=true                                  # Auto-start poll
 EVERNOTE_POLL_INTERVAL=3600000                                 # 1 hour (min: 900000 = 15 min)
 EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for change notifications
 
+# Destructive operations (optional, default: off)
+EVERNOTE_ENABLE_DESTRUCTIVE=true            # Advertise + allow delete_note (trash/restore) and connection action:"revoke"
+
 # Request queue / rate limits (optional)
 EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous Evernote RPCs through the shared queue (default: 3)
 EVERNOTE_MIN_REQUEST_INTERVAL_MS=0          # Minimum gap between RPC dispatches; 0 = no pacing (default: 0)
@@ -433,7 +436,8 @@ EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 
 ## Available Tools
 
-The server exposes **15 tools** (consolidated from 27). Retired tool names still
+The server exposes **14 tools** by default (15 with `EVERNOTE_ENABLE_DESTRUCTIVE=true`,
+consolidated from 27). Retired tool names still
 work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true`
 — see [MIGRATION.md](MIGRATION.md) for the full old→new mapping. Highlights:
 `get_resource({guid, as, saveToPath})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
@@ -442,6 +446,13 @@ work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true
 for additive tag changes, and `guids` + `notebookName` to move several notes;
 `delete_note` can `action:"restore"` a trashed note; and the `polling` and
 `connection` tools dispatch on an `action`.
+
+**Destructive operations are opt-in.** `evernote_delete_note` and the
+`connection` tool's `action:"revoke"` (plus the legacy `evernote_revoke_auth`
+alias) are only listed and callable when the server runs with
+`EVERNOTE_ENABLE_DESTRUCTIVE=true`. Without it, calls return an error naming the
+flag, and `evernote_connection` is annotated non-destructive. `update_note`'s
+`forceUpdate` stays available but still requires its confirmation string.
 
 ## Markdown Support
 
@@ -470,7 +481,8 @@ Create a new note in Evernote.
 **Parameters:**
 - `title` (required): Note title
 - `content` (required): Note content (plain text or markdown)
-- `notebookName` (optional): Target notebook name
+- `notebookName` (optional): Name of an existing notebook. Matching is exact, then case-insensitive. An unknown name is rejected with close matches (`Notebook "Meetngs" not found. Did you mean: "Meetings"?`) instead of silently creating a notebook.
+- `createNotebook` (optional): Set `true` to create `notebookName` if it does not exist (default: `false`).
 - `tags` (optional): Array of tag names
 
 **Example:**
@@ -505,7 +517,12 @@ Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 - `guids`: array of up to 25 GUIDs — metadata + `content` only (no attachment text; use a single `guid` for that). Returns `{ notes, failed?, aborted? }`; on a mid-batch rate limit it stops with partial results plus the guids left to resume.
 - `format` (optional): body projection — `markdown` (default), `text`, or `enml`
 - `includeContent` (optional): include note content (default: true)
-- `includeAttachmentText` (optional, single-note only): extract PDF/OCR attachment text (default: true)
+- `includeAttachmentText` (optional, single-note only): extract PDF/OCR attachment text into each resource's `attachmentText` (default: true)
+
+> **Breaking (since this release):** extracted attachment text is returned only as
+> `resources[].attachmentText`. The legacy duplicate fields `pdfText` (PDFs) and
+> `ocrText` (images) are no longer emitted; they doubled large responses. Read
+> `attachmentText` instead.
 
 > Returned Markdown represents embedded resources with `evernote-resource:<hash>` URLs. Leave those references intact so attachments stay linked when you edit the note.
 
@@ -517,7 +534,8 @@ Update an existing note. Two mutually exclusive modes:
 - `guids`: Up to 25 note GUIDs for a batch move / tag edit (only `notebookName`, `addTags`, and `removeTags` are allowed)
 - `title` (optional): New title
 - `content` (optional): New content (Markdown supported)
-- `notebookName` (optional): Move the note(s) to this notebook. Batch moves error if the notebook does not exist (they do not auto-create it).
+- `notebookName` (optional): Move the note(s) to this existing notebook. Unknown names are rejected with close matches, for single notes and batches alike.
+- `createNotebook` (optional): Set `true` to create `notebookName` if it does not exist (default: `false`). Allowed in batch mode.
 - `tags` (optional): New tags (replaces existing). Mutually exclusive with `addTags`/`removeTags`.
 - `addTags` / `removeTags` (optional): Add or remove tags by name or GUID without replacing the others. Missing `addTags` names are created.
 
@@ -527,6 +545,7 @@ Update an existing note. Two mutually exclusive modes:
   attachments. Cannot be combined with the full-update fields above.
 
 #### `evernote_delete_note`
+*Only available with `EVERNOTE_ENABLE_DESTRUCTIVE=true`.*
 Move a note to the Evernote trash, or restore a trashed note. This uses
 `NoteStore.deleteNote` (trash), not expunge — third-party apps cannot
 permanently delete notes.
@@ -564,6 +583,17 @@ notebooks between stacks only.
 #### `evernote_list_tags`
 List all tags in your account, or get one tag's full detail by passing its
 `name` or `guid` (absorbs the old `evernote_get_tag`).
+
+**Parameters (all optional):**
+- `name` / `guid`: return just this tag (cannot be combined with paging)
+- `query`: case-insensitive substring filter on tag names
+- `limit`: max tags per page, 1–1000 (default: all matches)
+- `offset`: tags to skip (default: 0)
+
+With none of `query`/`limit`/`offset`, the full tag array is returned exactly as
+before. With any of them, the response is
+`{ total, offset, limit, returned, hasMore, nextOffset?, tags }`, sorted by name,
+where `total` counts the filtered set.
 
 #### `evernote_create_tag`
 Create a new tag.
@@ -639,7 +669,8 @@ Manage the Evernote connection and account. Dispatches on `action`
   `verbose:true` for detailed diagnostics.
 - `action:"user"` — current user information and quota usage.
 - `action:"reconnect"` — force reconnection (useful on "Not connected" errors).
-- `action:"revoke"` — revoke the stored authentication token.
+- `action:"revoke"` — revoke the stored authentication token. Only available
+  with `EVERNOTE_ENABLE_DESTRUCTIVE=true`.
 
 **Example:**
 ```

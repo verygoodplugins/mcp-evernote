@@ -82,6 +82,19 @@ given a `name` or `guid`.
 
 `create_note` / `get_note` / `search_notes` names and existing args are unchanged. Later parity features were added as parameters on these tools rather than as new tools: `delete_note.action`, `update_note.addTags`/`removeTags`/`guids`.
 
+## Agent guardrails (breaking)
+
+- **`get_note` attachment text:** each resource now carries extracted text only
+  in `attachmentText`. The duplicate `pdfText` / `ocrText` fields are removed.
+- **Unknown notebook names are rejected.** `create_note` and `update_note`
+  (single and batch) no longer auto-create a notebook from a typo; the error
+  lists close matches. Pass `createNotebook: true` to create it on purpose.
+- **Destructive operations are opt-in.** `delete_note` and
+  `connection({action:"revoke"})` (and the `revoke_auth` alias) require
+  `EVERNOTE_ENABLE_DESTRUCTIVE=true`; otherwise they are unlisted and refused.
+- **`list_tags` paging (additive):** `query`, `limit`, `offset` return
+  `{ total, hasMore, nextOffset, tags }`; no params still returns the array.
+
 ## The 15 canonical tools
 
 Notes: `create_note`, `get_note`, `update_note`, `delete_note`, `search_notes` ·
@@ -89,6 +102,9 @@ Notebooks: `list_notebooks`, `create_notebook`, `update_notebook` ·
 Tags: `list_tags`, `create_tag`, `update_tag` ·
 Resources: `get_resource`, `add_resource_to_note` ·
 Admin: `polling`, `connection`.
+
+`delete_note` is listed only with `EVERNOTE_ENABLE_DESTRUCTIVE=true`, so the
+default surface is 14 tools.
 
 ## Deprecated aliases (14)
 
