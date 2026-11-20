@@ -2545,7 +2545,12 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
               filename,
               mimeType,
             )
-          : await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
+          : await evernoteApi.addResourceToNote(
+              noteGuid,
+              filePath,
+              filename,
+              mimeType,
+            );
 
         return {
           content: [

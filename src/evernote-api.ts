@@ -1014,6 +1014,7 @@ export class EvernoteAPI {
     noteGuid: string,
     filePath: string,
     filename?: string,
+    mimeType?: string,
   ): Promise<any> {
     const resolvedPath = await validateLocalFilePath(filePath);
 
@@ -1021,12 +1022,12 @@ export class EvernoteAPI {
     const fileData = await readFile(resolvedPath);
     const displayName = filename || basename(filePath);
     const ext = extname(filePath).toLowerCase();
-    const mimeType = this.getMimeType(ext);
+    const resolvedMime = mimeType || this.getMimeType(ext);
     return await this.attachResourceToNote(
       noteGuid,
       fileData,
       displayName,
-      mimeType,
+      resolvedMime,
     );
   }
 

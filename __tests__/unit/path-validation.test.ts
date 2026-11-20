@@ -144,6 +144,14 @@ describe('validateWritableFilePath', () => {
       /outside allowed roots/i,
     );
   });
+
+  it('rejects a dangling symlink even when the link sits inside an allowed root', async () => {
+    const dest = path.join(safeRoot, 'dangling-link.bin');
+    symlinkSync(path.join(outsideRoot, 'missing-target.bin'), dest);
+    await expect(validateWritableFilePath(dest)).rejects.toThrow(
+      /dangling symlink/i,
+    );
+  });
 });
 
 describe('safe path validation is used in evernote-api.ts', () => {
