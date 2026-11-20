@@ -6,7 +6,7 @@ function makeApi(noteStore: any) {
   return new EvernoteAPI(
     client as any,
     { noteStoreUrl: "https://x/notestore" } as any,
-    { rateLimitAutoRetrySeconds: 0, noteCache: { maxEntries: 0 } },
+    { rateLimitAutoRetrySeconds: 0, sleep: async () => {}, noteCache: { maxEntries: 0 } },
   );
 }
 
@@ -210,6 +210,29 @@ describe("official MCP parity — EvernoteAPI", () => {
         remainingGuids: ["n2", "n3"],
       });
       expect(updateNote).toHaveBeenCalledTimes(2);
+    });
+
+    it("records an edit-lock (code 19 without duration) and continues the batch", async () => {
+      const getNote = jest.fn(async (guid: string) => note({ guid }));
+      const editLock = Object.assign(new Error("edit lock"), {
+        errorCode: 19,
+      });
+      const updateNote = jest.fn(async (n: any) => {
+        if (n.guid === "n2") throw editLock;
+        return n;
+      });
+      const api = makeApi({ getNote, updateNote });
+
+      const result = await api.updateNotesMetadata({
+        guids: ["n1", "n2", "n3"],
+        notebookGuid: "nb-new",
+      });
+
+      expect(result.updated.map((u) => u.guid)).toEqual(["n1", "n3"]);
+      expect(result.failed).toEqual([
+        expect.objectContaining({ guid: "n2", errorCode: 19 }),
+      ]);
+      expect(result.aborted).toBeUndefined();
     });
 
     it("rejects a tag that is both added and removed", async () => {

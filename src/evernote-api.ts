@@ -632,16 +632,20 @@ export class EvernoteAPI {
         if (isAuthErrorCode(errorCode)) {
           throw error;
         }
-        if (errorCode === RATE_LIMIT_ERROR_CODE) {
+        // Code 19 is also used for note edit locks. Those have no positive
+        // rateLimitDuration; only a timed hourly quota should abort the batch.
+        const isHourlyRateLimit =
+          errorCode === RATE_LIMIT_ERROR_CODE &&
+          typeof rateLimitDuration === "number" &&
+          Number.isFinite(rateLimitDuration) &&
+          rateLimitDuration > 0;
+        if (isHourlyRateLimit) {
           return {
             updated,
             failed,
             aborted: {
               reason: "rate_limited",
-              retryAfterSeconds:
-                typeof rateLimitDuration === "number"
-                  ? rateLimitDuration
-                  : undefined,
+              retryAfterSeconds: rateLimitDuration,
               remainingGuids: params.guids.slice(i),
             },
           };
