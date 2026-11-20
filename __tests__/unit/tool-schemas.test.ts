@@ -361,25 +361,6 @@ describe('tool schemas (M1)', () => {
     });
   });
 
-  describe('SearchNotesSchema semantic mode', () => {
-    it('defaults mode to keyword', () => {
-      const result = SearchNotesSchema.parse({ query: 'test' });
-      expect(result.mode).toBe('keyword');
-    });
-
-    it('accepts mode semantic with offset 0', () => {
-      const result = SearchNotesSchema.parse({ query: 'invoice', mode: 'semantic' });
-      expect(result.mode).toBe('semantic');
-      expect(result.offset).toBe(0);
-    });
-
-    it('rejects paging in semantic mode', () => {
-      expect(() =>
-        SearchNotesSchema.parse({ query: 'invoice', mode: 'semantic', offset: 20 }),
-      ).toThrow(/does not support paging/);
-    });
-  });
-
   describe('UpdateNoteSchema additive tags and batch moves', () => {
     it('accepts addTags and removeTags on a single guid', () => {
       const result = UpdateNoteSchema.parse({

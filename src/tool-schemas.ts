@@ -17,17 +17,6 @@ export const SearchNotesSchema = z.object({
   includePreview: z.boolean().optional().default(false),
   includeContent: z.boolean().optional().default(false),
   format: NoteFormatSchema.optional().default('markdown'),
-  // "semantic" uses NoteStore.findRelated (relatedness, not embeddings).
-  // Plain text only — Evernote search grammar is ignored in this mode.
-  mode: z.enum(['keyword', 'semantic']).optional().default('keyword'),
-}).superRefine((data, ctx) => {
-  if (data.mode === 'semantic' && data.offset > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['offset'],
-      message: 'mode "semantic" does not support paging; omit offset or set it to 0',
-    });
-  }
 });
 
 // get_note accepts either a single `guid` or a batch `guids` (max 25), never

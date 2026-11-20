@@ -20,53 +20,6 @@ const note = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("official MCP parity — EvernoteAPI", () => {
-  describe("findRelated (semantic search)", () => {
-    it("calls NoteStore.findRelated with plainText and a capped maxNotes", async () => {
-      const findRelated = jest.fn(async () => ({
-        notes: [
-          { guid: "n2", title: "Related invoice", created: 1, updated: 2 },
-        ],
-        tags: [{ guid: "t1", name: "finance" }],
-      }));
-      const api = makeApi({ findRelated });
-
-      const result = await api.findRelated({
-        plainText: "q4 invoices",
-        notebookGuid: "nb1",
-        maxNotes: 100,
-      });
-
-      expect(findRelated).toHaveBeenCalledTimes(1);
-      const [query, spec] = findRelated.mock.calls[0] as [any, any];
-      expect(query.plainText).toBe("q4 invoices");
-      expect(query.noteGuid).toBeFalsy();
-      expect(query.filter?.notebookGuid).toBe("nb1");
-      expect(spec.maxNotes).toBe(25);
-      expect(result.notes).toHaveLength(1);
-      expect(result.tags[0].name).toBe("finance");
-    });
-
-    it("accepts a noteGuid instead of plainText", async () => {
-      const findRelated = jest.fn(async () => ({ notes: [] }));
-      const api = makeApi({ findRelated });
-      await api.findRelated({ noteGuid: "n1", maxNotes: 5 });
-      const [query, spec] = findRelated.mock.calls[0] as [any, any];
-      expect(query.noteGuid).toBe("n1");
-      expect(query.plainText).toBeFalsy();
-      expect(spec.maxNotes).toBe(5);
-    });
-
-    it("rejects missing or combined query inputs", async () => {
-      const api = makeApi({ findRelated: jest.fn() });
-      await expect(api.findRelated({})).rejects.toThrow(
-        /exactly one of plainText or noteGuid/,
-      );
-      await expect(
-        api.findRelated({ plainText: "a", noteGuid: "n1" }),
-      ).rejects.toThrow(/exactly one of plainText or noteGuid/);
-    });
-  });
-
   describe("deleteNote and restoreNote", () => {
     it("deleteNote uses NoteStore.deleteNote (trash) and does not expunge", async () => {
       const deleteNote = jest.fn(async () => 10);

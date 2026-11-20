@@ -144,8 +144,6 @@ rather than multiplied into separate tools:
   mode, mutually exclusive with the full-field inputs) — absorbing the old
   `patch_note`. `addTags`/`removeTags` add or remove tags without replacing
   the rest. `guids` + `notebookName` moves up to 25 notes.
-- `search_notes` takes `mode:"semantic"` for `NoteStore.findRelated`
-  (relatedness, not embeddings; plain text; no paging; max 25).
 - `delete_note({guid, action: trash|restore})` moves a note to the trash
   (default) or restores it. This is not a permanent delete.
 - `add_resource_to_note` accepts `filePath` or base64 `content` + `filename`.
@@ -171,8 +169,7 @@ takes either `guid` (single, full detail incl. attachment text) or `guids` (a
 `get_note` and `search_notes` take a `format` of `markdown` | `text` | `enml`;
 `search_notes` takes `offset` + `includeContent` for paged full-text export
 (`query:"*"` + `notebookName` + `includeContent`, page until `hasMore` is
-false) and `mode:"semantic"` for relatedness search — so there is no
-separate `get_notes_batch`, `export_notebook`, `semantic_search`,
+false) — so there is no separate `get_notes_batch`, `export_notebook`,
 `move_notes`, or `restore_note` tool.
 Multi-note responses are bounded by `EVERNOTE_MAX_RESPONSE_CHARS`.
 

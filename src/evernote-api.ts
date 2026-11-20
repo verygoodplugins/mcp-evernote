@@ -107,10 +107,6 @@ function cachedNoteNeedsInlineBodies(note: any): boolean {
   );
 }
 
-// EDAM related-search and resource size limits from evernote/Limits.
-// findRelated ranks by Evernote "relatedness", not embeddings.
-const RELATED_MAX_NOTES = 25;
-const RELATED_PLAINTEXT_LEN_MAX = 131072;
 // EDAM_RESOURCE_SIZE_MAX_PREMIUM; free accounts are rejected by the service at 25 MiB.
 export const RESOURCE_SIZE_MAX_BYTES = 209715200;
 
@@ -800,59 +796,6 @@ export class EvernoteAPI {
       maxNotes,
       spec,
     );
-  }
-
-  /**
-   * Find notes related to a plain-text query or an existing note, via
-   * NoteStore.findRelated. This is Evernote's native relatedness ranking,
-   * not embedding-based semantic search. There is no result offset; at most
-   * 25 notes are returned. Query text is plain text, not search grammar.
-   */
-  async findRelated(params: {
-    plainText?: string;
-    noteGuid?: string;
-    notebookGuid?: string;
-    maxNotes?: number;
-  }): Promise<{ notes: any[]; tags: any[]; notebooks: any[] }> {
-    const EvernoteModule = (Evernote as any).default || Evernote;
-    if (!!params.plainText === !!params.noteGuid) {
-      throw new Error("findRelated requires exactly one of plainText or noteGuid");
-    }
-    if (params.plainText !== undefined) {
-      const length = params.plainText.length;
-      if (length < 1 || length > RELATED_PLAINTEXT_LEN_MAX) {
-        throw new Error(
-          `Semantic query must be between 1 and ${RELATED_PLAINTEXT_LEN_MAX} characters`,
-        );
-      }
-    }
-
-    const query = new EvernoteModule.NoteStore.RelatedQuery();
-    if (params.plainText !== undefined) {
-      query.plainText = params.plainText;
-    }
-    if (params.noteGuid) {
-      query.noteGuid = params.noteGuid;
-    }
-    if (params.notebookGuid) {
-      const filter = new EvernoteModule.NoteStore.NoteFilter();
-      filter.notebookGuid = params.notebookGuid;
-      query.filter = filter;
-    }
-
-    const spec = new EvernoteModule.NoteStore.RelatedResultSpec();
-    spec.maxNotes = Math.min(
-      Math.max(params.maxNotes ?? 20, 1),
-      RELATED_MAX_NOTES,
-    );
-    spec.includeContainingNotebooks = true;
-
-    const result = await this.noteStore.findRelated(query, spec);
-    return {
-      notes: result?.notes ?? [],
-      tags: result?.tags ?? [],
-      notebooks: result?.notebooks ?? result?.containingNotebooks ?? [],
-    };
   }
 
   // Notebook operations

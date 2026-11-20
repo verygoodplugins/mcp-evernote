@@ -684,10 +684,9 @@ const tools: Tool[] = [
   {
     name: "evernote_search_notes",
     description:
-      "Search notes. Default keyword mode uses Evernote search syntax and pages with offset/nextOffset. " +
-      "mode:\"semantic\" uses NoteStore.findRelated (relatedness, not embeddings; plain text, no paging, max 25). " +
-      "Set includeContent: true for full bodies (capped at 25 per page). " +
-      'To export a whole notebook: query "*", set notebookName + includeContent, and page until hasMore is false.',
+      "Search notes. Returns note metadata plus `totalNotes`; page through results with `offset`/`nextOffset`. " +
+      "Set `includeContent: true` to include full bodies (each body costs one API call, so page size is capped at 25). " +
+      'To export a whole notebook as text: query "*", set notebookName + includeContent, and page with offset until hasMore is false.',
     inputSchema: {
       type: "object",
       properties: {
@@ -729,13 +728,6 @@ const tools: Tool[] = [
           description:
             "Include first ~300 chars of note content as a plain-text preview (one API call per note; ignored when includeContent is true)",
           default: false,
-        },
-        mode: {
-          type: "string",
-          enum: ["keyword", "semantic"],
-          description:
-            'keyword (default) uses Evernote search grammar. semantic uses findRelated: plain text, no paging, max 25, relatedness not embeddings.',
-          default: "keyword",
         },
       },
       required: ["query"],
@@ -1014,7 +1006,7 @@ const tools: Tool[] = [
   {
     name: "evernote_get_resource",
     description:
-      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
+      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. Optional saveToPath writes the result to a local file under allowed roots. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1699,12 +1691,10 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           includePreview = false,
           includeContent = false,
           format = "markdown",
-          mode = "keyword",
         } = validatedArgs;
 
         // Full-body fetches are far heavier than metadata; cap them tighter.
-        // Semantic (findRelated) is capped at 25 by the EDAM API.
-        const effectiveMax = includeContent || mode === "semantic"
+        const effectiveMax = includeContent
           ? Math.min(maxResults, 25)
           : maxResults;
 
@@ -1718,28 +1708,17 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           }
         }
 
-        const related =
-          mode === "semantic"
-            ? await evernoteApi.findRelated({
-                plainText: query,
-                notebookGuid,
-                maxNotes: effectiveMax,
-              })
-            : undefined;
-
         // Evernote's match-all is expressed by OMITTING words; a bare "*" is
         // not a valid text term. Translate it so the documented export path
         // (query "*" + notebookName) works.
         const words = query.trim() === "*" ? undefined : query;
 
-        const results = related
-          ? { notes: related.notes, totalNotes: related.notes.length }
-          : await evernoteApi.searchNotes({
-              words,
-              notebookGuid,
-              offset,
-              maxNotes: Math.min(effectiveMax, 100),
-            });
+        const results = await evernoteApi.searchNotes({
+          words,
+          notebookGuid,
+          offset,
+          maxNotes: Math.min(effectiveMax, 100),
+        });
 
         // Build tag lookup map (tagGuid -> tagName) from the cache.
         let tagMap: Map<string, string> | undefined;
@@ -1860,14 +1839,10 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           totalNotes: results.totalNotes,
           offset,
           returned,
-          hasMore: related ? false : hasMore,
+          hasMore,
           notes: budgetedNotes,
         };
-        if (mode === "semantic") {
-          payload.mode = "semantic";
-          payload.method = "findRelated";
-        }
-        if (!related && hasMore) {
+        if (hasMore) {
           payload.nextOffset = offset + progressed;
         }
         if (includeContent && effectiveMax !== maxResults) {

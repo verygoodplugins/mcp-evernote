@@ -440,9 +440,8 @@ work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true
 `list_notebooks`/`list_tags` return one entity when passed a `name`/`guid`;
 `update_note` takes `replacements[]` for patch-style edits, `addTags`/`removeTags`
 for additive tag changes, and `guids` + `notebookName` to move several notes;
-`search_notes` has `mode:"semantic"` for relatedness search; `delete_note` can
-`action:"restore"` a trashed note; and the `polling` and `connection` tools
-dispatch on an `action`.
+`delete_note` can `action:"restore"` a trashed note; and the `polling` and
+`connection` tools dispatch on an `action`.
 
 ## Markdown Support
 
@@ -483,14 +482,13 @@ Create a note titled "Meeting Notes" with content "Discussed Q4 planning" in not
 Search for notes using Evernote's search syntax. Returns note metadata plus `totalNotes`; page with `offset`/`nextOffset`.
 
 **Parameters:**
-- `query` (required): Search query (use `"*"` to match all notes). In `mode:"semantic"` this is plain text, not Evernote search grammar.
+- `query` (required): Search query (use `"*"` to match all notes)
 - `notebookName` (optional): Limit to specific notebook
-- `maxResults` (optional): Results per page (default: 20, max: 100; capped at 25 when `includeContent` is true or `mode` is `"semantic"`)
-- `offset` (optional): Result offset for paging (default: 0). Not supported with `mode:"semantic"`.
+- `maxResults` (optional): Results per page (default: 20, max: 100; capped at 25 when `includeContent` is true)
+- `offset` (optional): Result offset for paging (default: 0)
 - `includeContent` (optional): Include each note's full body in `content`, one API call per note (default: false)
 - `format` (optional): Body projection when `includeContent` is true — `markdown` (default), `text`, or `enml`
 - `includePreview` (optional): Include a ~300-char plain-text preview per note (ignored when `includeContent` is true)
-- `mode` (optional): `"keyword"` (default) uses Evernote search grammar. `"semantic"` uses `NoteStore.findRelated` — Evernote's relatedness ranking, not embeddings. No paging, max 25 results, plain-text query only.
 
 **Export a whole notebook** as text without a dedicated tool: `query: "*"`, set `notebookName` + `includeContent`, and page with `offset` until `hasMore` is false.
 
