@@ -436,10 +436,13 @@ EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 The server exposes **15 tools** (consolidated from 27). Retired tool names still
 work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true`
 — see [MIGRATION.md](MIGRATION.md) for the full old→new mapping. Highlights:
-`get_resource({guid, as})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
+`get_resource({guid, as, saveToPath})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
 `list_notebooks`/`list_tags` return one entity when passed a `name`/`guid`;
-`update_note` takes `replacements[]` for patch-style edits; and the `polling`
-and `connection` tools dispatch on an `action`.
+`update_note` takes `replacements[]` for patch-style edits, `addTags`/`removeTags`
+for additive tag changes, and `guids` + `notebookName` to move several notes;
+`search_notes` has `mode:"semantic"` for relatedness search; `delete_note` can
+`action:"restore"` a trashed note; and the `polling` and `connection` tools
+dispatch on an `action`.
 
 ## Markdown Support
 
@@ -480,13 +483,14 @@ Create a note titled "Meeting Notes" with content "Discussed Q4 planning" in not
 Search for notes using Evernote's search syntax. Returns note metadata plus `totalNotes`; page with `offset`/`nextOffset`.
 
 **Parameters:**
-- `query` (required): Search query (use `"*"` to match all notes)
+- `query` (required): Search query (use `"*"` to match all notes). In `mode:"semantic"` this is plain text, not Evernote search grammar.
 - `notebookName` (optional): Limit to specific notebook
-- `maxResults` (optional): Results per page (default: 20, max: 100; capped at 25 when `includeContent` is true)
-- `offset` (optional): Result offset for paging (default: 0)
+- `maxResults` (optional): Results per page (default: 20, max: 100; capped at 25 when `includeContent` is true or `mode` is `"semantic"`)
+- `offset` (optional): Result offset for paging (default: 0). Not supported with `mode:"semantic"`.
 - `includeContent` (optional): Include each note's full body in `content`, one API call per note (default: false)
 - `format` (optional): Body projection when `includeContent` is true — `markdown` (default), `text`, or `enml`
 - `includePreview` (optional): Include a ~300-char plain-text preview per note (ignored when `includeContent` is true)
+- `mode` (optional): `"keyword"` (default) uses Evernote search grammar. `"semantic"` uses `NoteStore.findRelated` — Evernote's relatedness ranking, not embeddings. No paging, max 25 results, plain-text query only.
 
 **Export a whole notebook** as text without a dedicated tool: `query: "*"`, set `notebookName` + `includeContent`, and page with `offset` until `hasMore` is false.
 
@@ -511,11 +515,13 @@ Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 Update an existing note. Two mutually exclusive modes:
 
 **Full-update mode parameters:**
-- `guid` (required): Note GUID
+- `guid`: Single note GUID (mutually exclusive with `guids`)
+- `guids`: Up to 25 note GUIDs for a batch move / tag edit (only `notebookName`, `addTags`, and `removeTags` are allowed)
 - `title` (optional): New title
 - `content` (optional): New content (Markdown supported)
-- `notebookName` (optional): Move the note to this notebook
-- `tags` (optional): New tags (replaces existing)
+- `notebookName` (optional): Move the note(s) to this notebook. Batch moves error if the notebook does not exist (they do not auto-create it).
+- `tags` (optional): New tags (replaces existing). Mutually exclusive with `addTags`/`removeTags`.
+- `addTags` / `removeTags` (optional): Add or remove tags by name or GUID without replacing the others. Missing `addTags` names are created.
 
 **Patch mode parameter** (replaces the old `evernote_patch_note`):
 - `replacements` (optional): Array of `{find, replace, replaceAll?}` find-and-replace
@@ -523,10 +529,13 @@ Update an existing note. Two mutually exclusive modes:
   attachments. Cannot be combined with the full-update fields above.
 
 #### `evernote_delete_note`
-Delete a note.
+Move a note to the Evernote trash, or restore a trashed note. This uses
+`NoteStore.deleteNote` (trash), not expunge — third-party apps cannot
+permanently delete notes.
 
 **Parameters:**
 - `guid` (required): Note GUID
+- `action` (optional): `"trash"` (default) or `"restore"`
 
 ### Notebook Operations
 
@@ -547,7 +556,10 @@ Rename a notebook or move it between stacks.
 **Parameters:**
 - `guid` (required): Notebook GUID
 - `name` (optional): New notebook name
-- `stack` (optional): Stack name — pass an empty string to remove it from its stack
+- `stack` (optional): Stack name — pass an empty string to remove it from its stack.
+
+Evernote Spaces are not in the public EDAM/Thrift API, so this tool moves
+notebooks between stacks only.
 
 ### Tag Operations
 
@@ -588,6 +600,10 @@ Read one attachment, projected through one of four views.
   - `"recognition"` — raw Evernote OCR recognition data.
   - `"metadata"` — filename, MIME type, size, hash, and `hasRecognition`.
 - `includeData` (optional, **deprecated**): `true` maps to `as:"binary"`, `false` to `as:"metadata"`.
+- `saveToPath` (optional): Write the result to a local file under an allowed root
+  (`EVERNOTE_ALLOWED_FILE_ROOTS`). `binary` writes the file bytes; `text` writes
+  extracted text; `recognition`/`metadata` write JSON. The response includes
+  `savedToPath`.
 
 There is no separate tool to list a note's attachments — `evernote_get_note`
 returns them in `resources[]`.
@@ -598,14 +614,22 @@ Get the text of the PDF attached to that invoice note
 ```
 
 #### `evernote_add_resource_to_note`
-Attach a local file to an existing note.
+Attach a file to an existing note, from a local path or a base64 body.
 
-**Parameters:**
+**Parameters:** provide exactly one of `filePath` or `content`.
 - `noteGuid` (required): Target note GUID
-- `filePath` (required): Path to the local file. Must sit under an allowed root —
+- `filePath`: Path to the local file. Must sit under an allowed root —
   see `EVERNOTE_ALLOWED_FILE_ROOTS` (defaults to your home directory and the
   current working directory).
-- `filename` (optional): Override the attachment's display name
+- `content`: Base64-encoded file body. Requires `filename`.
+- `filename`: Display name. Required with `content`; defaults to the file
+  basename when using `filePath`.
+- `mimeType` (optional): MIME type override; otherwise detected from the filename.
+
+Attachments are capped at 200 MiB (the EDAM premium limit). Free accounts may
+still be rejected by Evernote at 25 MiB. The official MCP's two-step
+`start_attachment_upload` / `finalize_attachment` flow is not used: EDAM
+accepts the full resource in a single `updateNote`.
 
 ### Connection & Account
 

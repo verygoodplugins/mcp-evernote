@@ -107,6 +107,13 @@ function cachedNoteNeedsInlineBodies(note: any): boolean {
   );
 }
 
+// EDAM related-search and resource size limits from evernote/Limits.
+// findRelated ranks by Evernote "relatedness", not embeddings.
+const RELATED_MAX_NOTES = 25;
+const RELATED_PLAINTEXT_LEN_MAX = 131072;
+// EDAM_RESOURCE_SIZE_MAX_PREMIUM; free accounts are rejected by the service at 25 MiB.
+export const RESOURCE_SIZE_MAX_BYTES = 209715200;
+
 export class EvernoteAPI {
   private noteStore: any;
   private client: any;
@@ -468,6 +475,163 @@ export class EvernoteAPI {
     this.noteCache?.evict(guid);
   }
 
+  /**
+   * Restore a trashed note by setting Note.active = true.
+   * Equivalent to the inverse of NoteStore.deleteNote (which is a trash,
+   * not an expunge). Third-party apps cannot permanently expunge notes.
+   */
+  async restoreNote(guid: string): Promise<any> {
+    const existing = await this.getNote(guid, false, false);
+    if (existing.active !== false) {
+      throw new Error(`Note ${guid} is not in the trash`);
+    }
+    return await this.updateNote({
+      guid: existing.guid,
+      title: existing.title,
+      active: true,
+    });
+  }
+
+  /**
+   * Resolve addTags/removeTags against the account tag list without replacing
+   * tags that were not named. addTags may be names or GUIDs; missing names
+   * are created. removeTags of an unknown tag is an error; removing a tag
+   * that is not on the note is a no-op.
+   */
+  async resolveTagChanges(
+    currentGuids: string[] | undefined,
+    addTags?: string[],
+    removeTags?: string[],
+  ): Promise<string[]> {
+    const add = addTags ?? [];
+    const remove = removeTags ?? [];
+    if (add.length === 0 && remove.length === 0) {
+      return [...(currentGuids ?? [])];
+    }
+
+    const tags = await this.listTags();
+    const byGuid = new Map(tags.map((t) => [t.guid!, t]));
+    const byName = new Map(tags.map((t) => [t.name!.toLowerCase(), t]));
+
+    const resolveExisting = (token: string) => {
+      if (byGuid.has(token)) return byGuid.get(token)!;
+      const named = byName.get(token.toLowerCase());
+      if (named) return named;
+      return undefined;
+    };
+
+    const addKeys = new Set(add.map((t) => t.toLowerCase()));
+    for (const token of remove) {
+      if (addKeys.has(token.toLowerCase()) || add.includes(token)) {
+        throw new Error(`Tag '${token}' cannot be both added and removed`);
+      }
+    }
+
+    const currentSet = new Set(currentGuids ?? []);
+
+    for (const token of remove) {
+      const tag = resolveExisting(token);
+      if (!tag) {
+        throw new Error(`Tag '${token}' not found`);
+      }
+      if (currentSet.has(tag.guid!)) {
+        currentSet.delete(tag.guid!);
+      }
+    }
+
+    for (const token of add) {
+      let tag = resolveExisting(token);
+      if (!tag) {
+        const created = await this.createTag(token);
+        tag = { guid: created.guid, name: created.name ?? token };
+        byGuid.set(tag.guid!, tag);
+        byName.set((tag.name ?? token).toLowerCase(), tag);
+      }
+      if (!currentSet.has(tag.guid!)) {
+        currentSet.add(tag.guid!);
+      }
+    }
+
+    return [...currentSet];
+  }
+
+  /**
+   * Move notes between notebooks and/or add/remove tags, without replacing
+   * other tags or touching note content or attachments. Used by update_note
+   * for batch moves (guids) and additive tag edits.
+   */
+  async updateNotesMetadata(params: {
+    guids: string[];
+    notebookGuid?: string;
+    addTags?: string[];
+    removeTags?: string[];
+  }): Promise<{
+    updated: Array<{
+      guid: string;
+      title?: string;
+      notebookGuid?: string;
+      tagGuids?: string[];
+    }>;
+    failed: Array<{ guid: string; error: string }>;
+  }> {
+    if (
+      !params.notebookGuid &&
+      !params.addTags?.length &&
+      !params.removeTags?.length
+    ) {
+      throw new Error("Provide notebookGuid and/or addTags/removeTags");
+    }
+
+    const addLower = new Set((params.addTags ?? []).map((t) => t.toLowerCase()));
+    for (const token of params.removeTags ?? []) {
+      if (addLower.has(token.toLowerCase())) {
+        throw new Error(`Tag '${token}' cannot be both added and removed`);
+      }
+    }
+
+    const updated: Array<{
+      guid: string;
+      title?: string;
+      notebookGuid?: string;
+      tagGuids?: string[];
+    }> = [];
+    const failed: Array<{ guid: string; error: string }> = [];
+
+    for (const guid of params.guids) {
+      try {
+        const existing = await this.getNote(guid, false, false);
+        const payload: any = {
+          guid: existing.guid,
+          title: existing.title,
+        };
+        if (params.notebookGuid) {
+          payload.notebookGuid = params.notebookGuid;
+        }
+        if (params.addTags?.length || params.removeTags?.length) {
+          payload.tagGuids = await this.resolveTagChanges(
+            existing.tagGuids,
+            params.addTags,
+            params.removeTags,
+          );
+        }
+        const result = await this.updateNote(payload);
+        updated.push({
+          guid: result.guid ?? guid,
+          title: result.title ?? existing.title,
+          notebookGuid: result.notebookGuid ?? payload.notebookGuid,
+          tagGuids: result.tagGuids ?? payload.tagGuids,
+        });
+      } catch (error) {
+        failed.push({
+          guid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return { updated, failed };
+  }
+
   async patchNoteContent(
     guid: string,
     replacements: NoteReplacement[],
@@ -607,6 +771,59 @@ export class EvernoteAPI {
       maxNotes,
       spec,
     );
+  }
+
+  /**
+   * Find notes related to a plain-text query or an existing note, via
+   * NoteStore.findRelated. This is Evernote's native relatedness ranking,
+   * not embedding-based semantic search. There is no result offset; at most
+   * 25 notes are returned. Query text is plain text, not search grammar.
+   */
+  async findRelated(params: {
+    plainText?: string;
+    noteGuid?: string;
+    notebookGuid?: string;
+    maxNotes?: number;
+  }): Promise<{ notes: any[]; tags: any[]; notebooks: any[] }> {
+    const EvernoteModule = (Evernote as any).default || Evernote;
+    if (!!params.plainText === !!params.noteGuid) {
+      throw new Error("findRelated requires exactly one of plainText or noteGuid");
+    }
+    if (params.plainText !== undefined) {
+      const length = params.plainText.length;
+      if (length < 1 || length > RELATED_PLAINTEXT_LEN_MAX) {
+        throw new Error(
+          `Semantic query must be between 1 and ${RELATED_PLAINTEXT_LEN_MAX} characters`,
+        );
+      }
+    }
+
+    const query = new EvernoteModule.NoteStore.RelatedQuery();
+    if (params.plainText !== undefined) {
+      query.plainText = params.plainText;
+    }
+    if (params.noteGuid) {
+      query.noteGuid = params.noteGuid;
+    }
+    if (params.notebookGuid) {
+      const filter = new EvernoteModule.NoteStore.NoteFilter();
+      filter.notebookGuid = params.notebookGuid;
+      query.filter = filter;
+    }
+
+    const spec = new EvernoteModule.NoteStore.RelatedResultSpec();
+    spec.maxNotes = Math.min(
+      Math.max(params.maxNotes ?? 20, 1),
+      RELATED_MAX_NOTES,
+    );
+    spec.includeContainingNotebooks = true;
+
+    const result = await this.noteStore.findRelated(query, spec);
+    return {
+      notes: result?.notes ?? [],
+      tags: result?.tags ?? [],
+      notebooks: result?.notebooks ?? result?.containingNotebooks ?? [],
+    };
   }
 
   // Notebook operations
@@ -798,21 +1015,62 @@ export class EvernoteAPI {
     filePath: string,
     filename?: string,
   ): Promise<any> {
-    const EvernoteModule = (Evernote as any).default || Evernote;
-
     const resolvedPath = await validateLocalFilePath(filePath);
 
     // Read file
     const fileData = await readFile(resolvedPath);
+    const displayName = filename || basename(filePath);
+    const ext = extname(filePath).toLowerCase();
+    const mimeType = this.getMimeType(ext);
+    return await this.attachResourceToNote(
+      noteGuid,
+      fileData,
+      displayName,
+      mimeType,
+    );
+  }
+
+  /**
+   * Attach a buffer (e.g. decoded base64) to a note. MIME is taken from
+   * `mimeType` or guessed from the filename. Enforces the 200 MiB EDAM
+   * premium resource cap; free accounts may still be rejected by the service
+   * at 25 MiB.
+   */
+  async addResourceToNoteFromBytes(
+    noteGuid: string,
+    fileData: Buffer,
+    filename: string,
+    mimeType?: string,
+  ): Promise<any> {
+    const ext = extname(filename).toLowerCase();
+    const resolvedMime = mimeType || this.getMimeType(ext);
+    return await this.attachResourceToNote(
+      noteGuid,
+      fileData,
+      filename,
+      resolvedMime,
+    );
+  }
+
+  private assertResourceSize(size: number): void {
+    if (size > RESOURCE_SIZE_MAX_BYTES) {
+      throw new Error(
+        `Attachment is ${size} bytes; the Evernote limit is ${RESOURCE_SIZE_MAX_BYTES} bytes (200 MiB)`,
+      );
+    }
+  }
+
+  private async attachResourceToNote(
+    noteGuid: string,
+    fileData: Buffer,
+    displayName: string,
+    mimeType: string,
+  ): Promise<any> {
+    this.assertResourceSize(fileData.length);
+    const EvernoteModule = (Evernote as any).default || Evernote;
     const hash = this.computeHash(fileData);
     const hashHex = hash.toString("hex");
 
-    // Determine MIME type from extension
-    const ext = extname(filePath).toLowerCase();
-    const mimeType = this.getMimeType(ext);
-    const displayName = filename || basename(filePath);
-
-    // Get existing note with content and resources
     const note = await this.noteStore.getNote(
       noteGuid,
       true,
@@ -821,7 +1079,6 @@ export class EvernoteAPI {
       false,
     );
 
-    // Create new resource
     const resource = new EvernoteModule.Types.Resource();
     resource.data = new EvernoteModule.Types.Data();
     resource.data.body = fileData;
@@ -833,20 +1090,17 @@ export class EvernoteAPI {
     attrs.fileName = displayName;
     resource.attributes = attrs;
 
-    // Add to existing resources
     if (!note.resources) {
       note.resources = [];
     }
     note.resources.push(resource);
 
-    // Append en-media tag to content before </en-note>
     const enMediaTag = `<en-media type="${mimeType}" hash="${hashHex}"/>`;
     note.content = note.content.replace(
       "</en-note>",
       `<br/>${enMediaTag}</en-note>`,
     );
 
-    // Update note
     return await this.updateNote(note);
   }
 

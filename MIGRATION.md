@@ -80,7 +80,7 @@ given a `name` or `guid`.
 |---|---|
 | `patch_note({guid, replacements})` | `update_note({guid, replacements})` |
 
-`create_note` / `get_note` / `delete_note` / `search_notes` are unchanged.
+`create_note` / `get_note` names and existing args are unchanged. Later parity features were added as parameters on these tools rather than as new tools: `search_notes.mode`, `delete_note.action`, `update_note.addTags`/`removeTags`/`guids`.
 
 ## The 15 canonical tools
 

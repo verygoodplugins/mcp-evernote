@@ -241,10 +241,49 @@ describe('tool schemas (M1)', () => {
   });
 
   describe('AddResourceToNoteSchema', () => {
-    it('rejects missing filePath', () => {
+    it('rejects missing filePath and content', () => {
       expect(() =>
         AddResourceToNoteSchema.parse({ noteGuid: 'abc' }),
-      ).toThrow();
+      ).toThrow(/exactly one of filePath or content/);
+    });
+
+    it('accepts a filePath upload without filename', () => {
+      const result = AddResourceToNoteSchema.parse({
+        noteGuid: 'abc',
+        filePath: '/tmp/doc.pdf',
+      });
+      expect(result.filePath).toBe('/tmp/doc.pdf');
+    });
+
+    it('accepts a base64 content upload with filename', () => {
+      const result = AddResourceToNoteSchema.parse({
+        noteGuid: 'abc',
+        content: 'aGVsbG8=',
+        filename: 'hello.txt',
+        mimeType: 'text/plain',
+      });
+      expect(result.content).toBe('aGVsbG8=');
+      expect(result.filename).toBe('hello.txt');
+    });
+
+    it('rejects content without filename', () => {
+      expect(() =>
+        AddResourceToNoteSchema.parse({
+          noteGuid: 'abc',
+          content: 'aGVsbG8=',
+        }),
+      ).toThrow(/filename is required/);
+    });
+
+    it('rejects filePath and content together', () => {
+      expect(() =>
+        AddResourceToNoteSchema.parse({
+          noteGuid: 'abc',
+          filePath: '/tmp/doc.pdf',
+          content: 'aGVsbG8=',
+          filename: 'doc.pdf',
+        }),
+      ).toThrow(/exactly one of filePath or content/);
     });
   });
 
@@ -282,6 +321,15 @@ describe('tool schemas (M1)', () => {
     it('rejects an unknown as view', () => {
       expect(() => GetResourceSchema.parse({ guid: 'r1', as: 'thumbnail' })).toThrow();
     });
+
+    it('passes through saveToPath', () => {
+      const result = GetResourceSchema.parse({
+        guid: 'r1',
+        as: 'binary',
+        saveToPath: '/tmp/out.bin',
+      });
+      expect(result.saveToPath).toBe('/tmp/out.bin');
+    });
   });
 
   describe('ConnectionSchema', () => {
@@ -313,7 +361,111 @@ describe('tool schemas (M1)', () => {
     });
   });
 
+  describe('SearchNotesSchema semantic mode', () => {
+    it('defaults mode to keyword', () => {
+      const result = SearchNotesSchema.parse({ query: 'test' });
+      expect(result.mode).toBe('keyword');
+    });
+
+    it('accepts mode semantic with offset 0', () => {
+      const result = SearchNotesSchema.parse({ query: 'invoice', mode: 'semantic' });
+      expect(result.mode).toBe('semantic');
+      expect(result.offset).toBe(0);
+    });
+
+    it('rejects paging in semantic mode', () => {
+      expect(() =>
+        SearchNotesSchema.parse({ query: 'invoice', mode: 'semantic', offset: 20 }),
+      ).toThrow(/does not support paging/);
+    });
+  });
+
+  describe('UpdateNoteSchema additive tags and batch moves', () => {
+    it('accepts addTags and removeTags on a single guid', () => {
+      const result = UpdateNoteSchema.parse({
+        guid: 'n1',
+        addTags: ['urgent'],
+        removeTags: ['later'],
+      });
+      expect(result.addTags).toEqual(['urgent']);
+      expect(result.removeTags).toEqual(['later']);
+    });
+
+    it('rejects combining tags with addTags', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({
+          guid: 'n1',
+          tags: ['a'],
+          addTags: ['b'],
+        }),
+      ).toThrow(/cannot be combined with addTags/);
+    });
+
+    it('rejects combining replacements with addTags', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({
+          guid: 'n1',
+          replacements: [{ find: 'a', replace: 'b' }],
+          addTags: ['x'],
+        }),
+      ).toThrow(/cannot be combined/);
+    });
+
+    it('accepts a batch move with guids and notebookName', () => {
+      const result = UpdateNoteSchema.parse({
+        guids: ['n1', 'n2'],
+        notebookName: 'Archive',
+      });
+      expect(result.guids).toEqual(['n1', 'n2']);
+    });
+
+    it('rejects guid and guids together', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({
+          guid: 'n1',
+          guids: ['n2'],
+          notebookName: 'Archive',
+        }),
+      ).toThrow(/exactly one of guid or guids/);
+    });
+
+    it('rejects batch updates that include title or content', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({
+          guids: ['n1'],
+          notebookName: 'Archive',
+          title: 'Nope',
+        }),
+      ).toThrow(/only supports notebookName/);
+    });
+
+    it('rejects a batch update with no move or tag changes', () => {
+      expect(() =>
+        UpdateNoteSchema.parse({ guids: ['n1'] }),
+      ).toThrow(/requires notebookName and\/or addTags/);
+    });
+  });
+
+  describe('DeleteNoteSchema restore action', () => {
+    it('defaults action to trash', () => {
+      expect(DeleteNoteSchema.parse({ guid: 'n1' }).action).toBe('trash');
+    });
+
+    it('accepts action restore', () => {
+      expect(DeleteNoteSchema.parse({ guid: 'n1', action: 'restore' }).action).toBe(
+        'restore',
+      );
+    });
+
+    it('rejects an unknown action', () => {
+      expect(() =>
+        DeleteNoteSchema.parse({ guid: 'n1', action: 'expunge' }),
+      ).toThrow();
+    });
+  });
+
   describe('validateToolArgs', () => {
+
     it('returns parsed args for known tools', () => {
       const result = validateToolArgs('evernote_create_note', {
         title: 'Test',

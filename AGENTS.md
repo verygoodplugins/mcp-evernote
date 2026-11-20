@@ -131,17 +131,24 @@ The server defines **15 tools**, all prefixed `evernote_` (defined in the
 
 **Consolidated surface (was 27).** Read/lifecycle operations are parameterized
 rather than multiplied into separate tools:
-- `get_resource({guid, as})` projects one attachment through `as: "text"`
-  (default; PDF/OCR extraction) | `"binary"` (base64) | `"recognition"` (OCR
-  data) | `"metadata"` (filename/mime/size/hash/hasRecognition). Replaces the
-  old `get_resource_text` / `get_resource_recognition` tools; a note's
-  attachment list comes from `get_note`'s `resources[]` (so no
+- `get_resource({guid, as, saveToPath})` projects one attachment through
+  `as: "text"` (default; PDF/OCR extraction) | `"binary"` (base64) |
+  `"recognition"` (OCR data) | `"metadata"` (filename/mime/size/hash/
+  hasRecognition). Optional `saveToPath` writes the result to a local file.
+  Replaces the old `get_resource_text` / `get_resource_recognition` tools; a
+  note's attachment list comes from `get_note`'s `resources[]` (so no
   `list_note_resources`).
 - `list_notebooks` / `list_tags` return the full list, or one entity when
   passed a `name` or `guid` (absorbing the old `get_notebook` / `get_tag`).
 - `update_note` takes `replacements[]` for targeted find-and-replace (patch
   mode, mutually exclusive with the full-field inputs) — absorbing the old
-  `patch_note`.
+  `patch_note`. `addTags`/`removeTags` add or remove tags without replacing
+  the rest. `guids` + `notebookName` moves up to 25 notes.
+- `search_notes` takes `mode:"semantic"` for `NoteStore.findRelated`
+  (relatedness, not embeddings; plain text; no paging; max 25).
+- `delete_note({guid, action: trash|restore})` moves a note to the trash
+  (default) or restores it. This is not a permanent delete.
+- `add_resource_to_note` accepts `filePath` or base64 `content` + `filename`.
 - `polling({action: start|stop|poll|status})` and
   `connection({action: status|user|reconnect|revoke})` replace the four
   polling command tools and the four `health_check`/`get_user_info`/
@@ -164,7 +171,9 @@ takes either `guid` (single, full detail incl. attachment text) or `guids` (a
 `get_note` and `search_notes` take a `format` of `markdown` | `text` | `enml`;
 `search_notes` takes `offset` + `includeContent` for paged full-text export
 (`query:"*"` + `notebookName` + `includeContent`, page until `hasMore` is
-false) — so there is no separate `get_notes_batch` or `export_notebook` tool.
+false) and `mode:"semantic"` for relatedness search — so there is no
+separate `get_notes_batch`, `export_notebook`, `semantic_search`,
+`move_notes`, or `restore_note` tool.
 Multi-note responses are bounded by `EVERNOTE_MAX_RESPONSE_CHARS`.
 
 ## Authentication

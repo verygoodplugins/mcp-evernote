@@ -49,6 +49,8 @@ import {
   buildWebhookPayload,
   checkForPollingChanges,
 } from "./polling.js";
+import { writeFile } from "fs/promises";
+import { validateWritableFilePath } from "./path-security.js";
 
 // CJS shim: package-local require (not cwd/argv) so global bin installs work.
 const { silenceEvernoteStdio } = createRequire(import.meta.url)(
@@ -682,9 +684,10 @@ const tools: Tool[] = [
   {
     name: "evernote_search_notes",
     description:
-      "Search notes. Returns note metadata plus `totalNotes`; page through results with `offset`/`nextOffset`. " +
-      "Set `includeContent: true` to include full bodies (each body costs one API call, so page size is capped at 25). " +
-      'To export a whole notebook as text: query "*", set notebookName + includeContent, and page with offset until hasMore is false.',
+      "Search notes. Default keyword mode uses Evernote search syntax and pages with offset/nextOffset. " +
+      "mode:\"semantic\" uses NoteStore.findRelated (relatedness, not embeddings; plain text, no paging, max 25). " +
+      "Set includeContent: true for full bodies (capped at 25 per page). " +
+      'To export a whole notebook: query "*", set notebookName + includeContent, and page until hasMore is false.',
     inputSchema: {
       type: "object",
       properties: {
@@ -726,6 +729,13 @@ const tools: Tool[] = [
           description:
             "Include first ~300 chars of note content as a plain-text preview (one API call per note; ignored when includeContent is true)",
           default: false,
+        },
+        mode: {
+          type: "string",
+          enum: ["keyword", "semantic"],
+          description:
+            'keyword (default) uses Evernote search grammar. semantic uses findRelated: plain text, no paging, max 25, relatedness not embeddings.',
+          default: "keyword",
         },
       },
       required: ["query"],
@@ -785,13 +795,23 @@ const tools: Tool[] = [
   {
     name: "evernote_update_note",
     description:
-      "Update an existing note. Full-update mode: pass title/content/tags/notebookName to replace those fields. Patch mode: pass replacements[] to apply targeted find-and-replace edits while preserving title, tags, notebook, and attachments — ideal for small changes like a status or date. The two modes are mutually exclusive.",
+      "Update notes. Full-update: title/content/tags/notebookName (tags replaces all). " +
+      "addTags/removeTags change tags without replacing the rest (missing addTags names are created). " +
+      "Pass guids + notebookName to move up to 25 notes, optionally with addTags/removeTags. " +
+      "Patch mode: replacements[] for find-and-replace that keeps title, tags, notebook, and attachments. Modes are mutually exclusive.",
     inputSchema: {
       type: "object",
       properties: {
         guid: {
           type: "string",
-          description: "Note GUID",
+          description: "Single note GUID (mutually exclusive with guids)",
+        },
+        guids: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 25,
+          description:
+            "Batch of note GUIDs, max 25 (mutually exclusive with guid). Only notebookName, addTags, and removeTags are allowed.",
         },
         title: {
           type: "string",
@@ -803,12 +823,22 @@ const tools: Tool[] = [
         },
         notebookName: {
           type: "string",
-          description: "Move note to this notebook (full-update mode)",
+          description: "Move the note(s) to this notebook",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "New tags, replacing existing tags (full-update mode)",
+          description: "New tags, replacing existing tags (full-update mode). Mutually exclusive with addTags/removeTags.",
+        },
+        addTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to add without removing others (names or GUIDs). Missing names are created.",
+        },
+        removeTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to remove without touching others (names or GUIDs).",
         },
         replacements: {
           type: "array",
@@ -851,13 +881,20 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_delete_note",
-    description: "Delete a note",
+    description:
+      "Move a note to the trash (default action:\"trash\") or restore it with action:\"restore\". This is not a permanent delete; third-party apps cannot expunge notes.",
     inputSchema: {
       type: "object",
       properties: {
         guid: {
           type: "string",
           description: "Note GUID",
+        },
+        action: {
+          type: "string",
+          enum: ["trash", "restore"],
+          description: 'trash (default) moves the note to the trash; restore brings a trashed note back.',
+          default: "trash",
         },
       },
       required: ["guid"],
@@ -992,13 +1029,19 @@ const tools: Tool[] = [
             "View to return (default: text). binary = base64 body; recognition = OCR data; metadata = info without the body.",
           default: "text",
         },
+        saveToPath: {
+          type: "string",
+          description:
+            "Optional local path to write the result (must be under allowed file roots). binary writes the file bytes; text writes extracted text; recognition/metadata write JSON.",
+        },
       },
       required: ["guid"],
     },
   },
   {
     name: "evernote_add_resource_to_note",
-    description: "Add a file/image attachment to an existing note",
+    description:
+      "Attach a file to an existing note. Provide filePath, or content (base64) plus filename. Optional mimeType; otherwise detected from the filename. Max 200 MiB (free accounts may be rejected at 25 MiB).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1008,14 +1051,22 @@ const tools: Tool[] = [
         },
         filePath: {
           type: "string",
-          description: "Local file path to attach",
+          description: "Local file path to attach (mutually exclusive with content)",
+        },
+        content: {
+          type: "string",
+          description: "Base64-encoded file body (mutually exclusive with filePath). Requires filename.",
         },
         filename: {
           type: "string",
-          description: "Optional display filename (defaults to file basename)",
+          description: "Display filename (required with content; defaults to the file basename when using filePath)",
+        },
+        mimeType: {
+          type: "string",
+          description: "MIME type override; otherwise detected from the filename",
         },
       },
-      required: ["noteGuid", "filePath"],
+      required: ["noteGuid"],
     },
   },
   // Notebook update tool
@@ -1648,10 +1699,12 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           includePreview = false,
           includeContent = false,
           format = "markdown",
+          mode = "keyword",
         } = validatedArgs;
 
         // Full-body fetches are far heavier than metadata; cap them tighter.
-        const effectiveMax = includeContent
+        // Semantic (findRelated) is capped at 25 by the EDAM API.
+        const effectiveMax = includeContent || mode === "semantic"
           ? Math.min(maxResults, 25)
           : maxResults;
 
@@ -1665,17 +1718,28 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           }
         }
 
+        const related =
+          mode === "semantic"
+            ? await evernoteApi.findRelated({
+                plainText: query,
+                notebookGuid,
+                maxNotes: effectiveMax,
+              })
+            : undefined;
+
         // Evernote's match-all is expressed by OMITTING words; a bare "*" is
         // not a valid text term. Translate it so the documented export path
         // (query "*" + notebookName) works.
         const words = query.trim() === "*" ? undefined : query;
 
-        const results = await evernoteApi.searchNotes({
-          words,
-          notebookGuid,
-          offset,
-          maxNotes: Math.min(effectiveMax, 100),
-        });
+        const results = related
+          ? { notes: related.notes, totalNotes: related.notes.length }
+          : await evernoteApi.searchNotes({
+              words,
+              notebookGuid,
+              offset,
+              maxNotes: Math.min(effectiveMax, 100),
+            });
 
         // Build tag lookup map (tagGuid -> tagName) from the cache.
         let tagMap: Map<string, string> | undefined;
@@ -1718,8 +1782,14 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             const enhanced: any = {
               guid: note.guid,
               title: note.title,
-              created: new Date(note.created).toISOString(),
-              updated: new Date(note.updated).toISOString(),
+              created:
+                note.created != null
+                  ? new Date(note.created).toISOString()
+                  : undefined,
+              updated:
+                note.updated != null
+                  ? new Date(note.updated).toISOString()
+                  : undefined,
               contentLength: note.contentLength,
               notebookGuid: note.notebookGuid,
             };
@@ -1790,10 +1860,14 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           totalNotes: results.totalNotes,
           offset,
           returned,
-          hasMore,
+          hasMore: related ? false : hasMore,
           notes: budgetedNotes,
         };
-        if (hasMore) {
+        if (mode === "semantic") {
+          payload.mode = "semantic";
+          payload.method = "findRelated";
+        }
+        if (!related && hasMore) {
           payload.nextOffset = offset + progressed;
         }
         if (includeContent && effectiveMax !== maxResults) {
@@ -2011,10 +2085,13 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       case "evernote_update_note": {
         const {
           guid,
+          guids,
           title,
           content,
           notebookName,
           tags,
+          addTags,
+          removeTags,
           forceUpdate = false,
           replacements,
         } = validatedArgs;
@@ -2050,6 +2127,64 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           };
         }
 
+        // Batch move / additive tags, or a single-note metadata-only edit
+        // (no title/content/replace-all tags/forceUpdate). Resolves the
+        // official move_notes and update_note_tags tools onto update_note.
+        const isMetadataOnly =
+          title === undefined &&
+          content === undefined &&
+          tags === undefined &&
+          !forceUpdate &&
+          (notebookName !== undefined ||
+            addTags !== undefined ||
+            removeTags !== undefined);
+        if (guids || isMetadataOnly) {
+          const ids: string[] = guids ?? [guid];
+          let targetNotebookGuid: string | undefined;
+          if (notebookName !== undefined) {
+            const notebooks = await evernoteApi.listNotebooks();
+            notebookCache = notebooks;
+            const notebook = notebooks.find((nb) => nb.name === notebookName);
+            if (!notebook) {
+              throw new Error(`Notebook '${notebookName}' not found`);
+            }
+            targetNotebookGuid = notebook.guid;
+          }
+          const result = await evernoteApi.updateNotesMetadata({
+            guids: ids,
+            notebookGuid: targetNotebookGuid,
+            addTags,
+            removeTags,
+          });
+          const summary = {
+            updated: result.updated,
+            failed: result.failed.length > 0 ? result.failed : undefined,
+          };
+          if (result.failed.length > 0 && result.updated.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `⚠️ Note update failed\n${JSON.stringify(summary, null, 2)}`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `✅ Updated ${result.updated.length} note(s)` +
+                  (result.failed.length
+                    ? `, ${result.failed.length} failed`
+                    : "") +
+                  `\n${JSON.stringify(summary, null, 2)}`,
+              },
+            ],
+          };
+        }
+
         console.error(`Updating note ${guid}`);
 
         let forceUpdateNotebookGuid: string | undefined;
@@ -2069,6 +2204,12 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
           if (tags !== undefined) {
             note.tagNames = tags;
+          } else if (addTags !== undefined || removeTags !== undefined) {
+            note.tagGuids = await evernoteApi.resolveTagChanges(
+              note.tagGuids,
+              addTags,
+              removeTags,
+            );
           }
 
           let notebookWarning: string | undefined;
@@ -2167,14 +2308,26 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_delete_note": {
-        const { guid } = validatedArgs;
+        const { guid, action = "trash" } = validatedArgs;
+        if (action === "restore") {
+          const restored = await evernoteApi.restoreNote(guid);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Note ${guid} restored from the trash.\nTitle: ${restored.title ?? ""}`,
+              },
+            ],
+          };
+        }
+
         await evernoteApi.deleteNote(guid);
 
         return {
           content: [
             {
               type: "text",
-              text: `Note ${guid} deleted successfully`,
+              text: `Note ${guid} moved to the trash. Restore it with evernote_delete_note({ action: "restore" }).`,
             },
           ],
         };
@@ -2289,28 +2442,42 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
       // Resource tools
       case "evernote_get_resource": {
-        const { guid, as } = validatedArgs;
+        const { guid, as, saveToPath } = validatedArgs;
 
         if (as === "text") {
           const text = await evernoteApi.extractResourceText(guid);
+          if (saveToPath) {
+            const dest = await validateWritableFilePath(saveToPath);
+            await writeFile(dest, text, "utf8");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ text, savedToPath: dest }, null, 2),
+                },
+              ],
+            };
+          }
           return { content: [{ type: "text", text }] };
         }
 
         if (as === "recognition") {
           const recognition = await evernoteApi.getResourceRecognition(guid);
           const allText = evernoteApi.extractTextFromRecognition(recognition);
+          const recognitionResult = {
+            ...recognition,
+            extractedText: allText || "(no text recognized)",
+          };
+          if (saveToPath) {
+            const dest = await validateWritableFilePath(saveToPath);
+            await writeFile(dest, JSON.stringify(recognitionResult, null, 2), "utf8");
+            (recognitionResult as any).savedToPath = dest;
+          }
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(
-                  {
-                    ...recognition,
-                    extractedText: allText || "(no text recognized)",
-                  },
-                  null,
-                  2,
-                ),
+                text: JSON.stringify(recognitionResult, null, 2),
               },
             ],
           };
@@ -2345,6 +2512,19 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           result.data = Buffer.from(resource.data.body).toString("base64");
         }
 
+        if (saveToPath) {
+          const dest = await validateWritableFilePath(saveToPath);
+          if (as === "binary") {
+            if (!resource.data?.body) {
+              throw new Error(`Resource ${guid} has no binary body to save`);
+            }
+            await writeFile(dest, Buffer.from(resource.data.body));
+          } else {
+            await writeFile(dest, JSON.stringify(result, null, 2), "utf8");
+          }
+          result.savedToPath = dest;
+        }
+
         return {
           content: [
             {
@@ -2356,12 +2536,16 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_add_resource_to_note": {
-        const { noteGuid, filePath, filename } = validatedArgs;
-        const updatedNote = await evernoteApi.addResourceToNote(
-          noteGuid,
-          filePath,
-          filename,
-        );
+        const { noteGuid, filePath, content, filename, mimeType } =
+          validatedArgs;
+        const updatedNote = content
+          ? await evernoteApi.addResourceToNoteFromBytes(
+              noteGuid,
+              Buffer.from(content, "base64"),
+              filename,
+              mimeType,
+            )
+          : await evernoteApi.addResourceToNote(noteGuid, filePath, filename);
 
         return {
           content: [
