@@ -2164,12 +2164,21 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
               }
             }
           }
-          const result = await evernoteApi.updateNotesMetadata({
-            guids: ids,
-            notebookGuid: targetNotebookGuid,
-            addTags,
-            removeTags,
-          });
+          let result;
+          try {
+            result = await evernoteApi.updateNotesMetadata({
+              guids: ids,
+              notebookGuid: targetNotebookGuid,
+              addTags,
+              removeTags,
+            });
+          } finally {
+            // addTags may have created tags; bust the list cache even if a
+            // later note in the batch failed or the call threw.
+            if (addTags) {
+              clearEntityCaches();
+            }
+          }
           const summary: any = {
             updated: result.updated,
             failed: result.failed.length > 0 ? result.failed : undefined,
@@ -2238,6 +2247,9 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             additiveTagNames = (note.tagGuids ?? [])
               .map((g: string) => tagNameByGuid.get(g))
               .filter((name: string | undefined): name is string => !!name);
+            if (addTags) {
+              clearEntityCaches();
+            }
           }
 
           let notebookWarning: string | undefined;
