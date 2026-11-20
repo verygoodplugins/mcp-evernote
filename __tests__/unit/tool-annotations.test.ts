@@ -173,12 +173,12 @@ function parseToolsArray(source: string, declaration: string): ParsedTool[] {
     throw new Error(`Missing ${declaration}`);
   }
   const after = source.slice(start + declaration.length);
-  const end = after.indexOf("\n];");
+  const end = after.search(/\r?\n\];/);
   if (end < 0) {
     throw new Error(`Unclosed ${declaration}`);
   }
   const body = after.slice(0, end);
-  const chunks = body.split(/\n  \{\n    name: "/).slice(1);
+  const chunks = body.split(/\r?\n  \{\r?\n    name: "/).slice(1);
   return chunks.map((chunk) => {
     const name = chunk.slice(0, chunk.indexOf('"'));
     const block = `    name: "${chunk}`;
@@ -195,7 +195,7 @@ describe("advertised tool design", () => {
   const source = readFileSync(
     resolve(import.meta.dirname, "../../src/index.ts"),
     "utf-8",
-  );
+  ).replace(/\r\n/g, "\n");
   const tools = parseToolsArray(source, "const tools: Tool[] = [");
 
   it("advertises exactly 15 canonical tools", () => {
@@ -251,7 +251,7 @@ describe("legacy tool annotations", () => {
   const source = readFileSync(
     resolve(import.meta.dirname, "../../src/index.ts"),
     "utf-8",
-  );
+  ).replace(/\r\n/g, "\n");
   const legacy = parseToolsArray(source, "const legacyTools: Tool[] = [");
 
   it("declares title, readOnlyHint, and destructiveHint on every legacy alias", () => {
