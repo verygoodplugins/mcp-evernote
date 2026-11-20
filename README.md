@@ -351,7 +351,7 @@ claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
 | `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | Requests per minute per caller on `/mcp` and `/metrics` (429 when exceeded); missing/invalid keys share one bucket |
 
 Endpoints: `/mcp` (Streamable HTTP), `/metrics` (queue + session counts,
-needs a key), `/healthz` (liveness, no key). Local file paths in tools like
+needs a key), `/health` (liveness, no key; `/healthz` is an alias). Local file paths in tools like
 `evernote_add_resource_to_note` resolve on the machine running the server.
 
 ## Cookie-Based Authentication (No API Key Needed)

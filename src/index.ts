@@ -656,6 +656,13 @@ function getPollingStatus(): any {
 const tools: Tool[] = [
   {
     name: "evernote_create_note",
+    title: "Create note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new note in Evernote",
     inputSchema: {
       type: "object",
@@ -683,10 +690,16 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_search_notes",
+    title: "Search notes",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Search notes. Returns note metadata plus `totalNotes`; page through results with `offset`/`nextOffset`. " +
-      "Set `includeContent: true` to include full bodies (each body costs one API call, so page size is capped at 25). " +
-      'To export a whole notebook as text: query "*", set notebookName + includeContent, and page with offset until hasMore is false.',
+      "Search notes. Returns metadata plus totalNotes; page with offset/nextOffset. " +
+      "includeContent adds full bodies (page size capped at 25). " +
+      'To export a notebook: query "*", set notebookName + includeContent, and page until hasMore is false.',
     inputSchema: {
       type: "object",
       properties: {
@@ -735,11 +748,15 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_get_note",
+    title: "Get note",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Get one or more notes. Provide exactly one of `guid` (single note, full detail including attachment/OCR text) " +
-      "or `guids` (batch of up to 25, body-focused: metadata + content only, no attachment text — use single `guid` for that). " +
-      "Batch mode returns { notes, failed?, aborted? } and, if the hourly rate limit hits mid-batch, stops with partial " +
-      "results plus the guids left to resume.",
+      "Get a note by guid (full detail, including attachment/OCR text) or a batch by guids (up to 25, body only). " +
+      "A mid-batch rate limit returns partial results plus the remaining guids to resume.",
     inputSchema: {
       type: "object",
       properties: {
@@ -786,11 +803,17 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_update_note",
+    title: "Update note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Update notes. Full-update: title/content/tags/notebookName (tags replaces all). " +
-      "addTags/removeTags change tags without replacing the rest (missing addTags names are created). " +
-      "Pass guids + notebookName to move up to 25 notes, optionally with addTags/removeTags. " +
-      "Patch mode: replacements[] for find-and-replace that keeps title, tags, notebook, and attachments. Modes are mutually exclusive.",
+      "Update a note's title, content, tags, or notebook, or move/tag a batch with guids. " +
+      "addTags/removeTags are additive (missing names are created). " +
+      "replacements[] is a find-and-replace patch that keeps attachments. Modes are mutually exclusive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -873,6 +896,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_delete_note",
+    title: "Delete or restore note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       "Move a note to the trash (default action:\"trash\") or restore it with action:\"restore\". This is not a permanent delete; third-party apps cannot expunge notes.",
     inputSchema: {
@@ -894,6 +924,12 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_notebooks",
+    title: "List notebooks",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "List all notebooks, or get one notebook's full detail by passing its name or guid.",
     inputSchema: {
@@ -912,6 +948,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_create_notebook",
+    title: "Create notebook",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new notebook",
     inputSchema: {
       type: "object",
@@ -930,6 +973,12 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_tags",
+    title: "List tags",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "List all tags, or get one tag's full detail by passing its name or guid.",
     inputSchema: {
@@ -948,6 +997,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_create_tag",
+    title: "Create tag",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new tag",
     inputSchema: {
       type: "object",
@@ -966,6 +1022,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_connection",
+    title: "Manage connection",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       'Manage the Evernote connection and account. action: "status" runs a health/diagnostic check (auth state, config), "user" returns the account profile + quota, "reconnect" forces reinitialization (useful when "Not connected" errors persist), "revoke" clears the stored auth token.',
     inputSchema: {
@@ -988,6 +1051,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_polling",
+    title: "Manage polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       'Manage background polling for Evernote changes (detected changes are sent to the configured webhook). action: "start" begins polling, "stop" halts it, "poll" checks once immediately, "status" returns the current polling configuration and state.',
     inputSchema: {
@@ -1005,8 +1075,16 @@ const tools: Tool[] = [
   // Resource tools
   {
     name: "evernote_get_resource",
+    title: "Get attachment",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
-      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. Optional saveToPath writes the result to a local file under allowed roots. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
+      "Get an attachment by GUID as text (default; PDF/OCR), binary (base64), recognition, or metadata. " +
+      "Optional saveToPath writes the result under allowed roots. To list a note's attachments, use evernote_get_note resources[].",
     inputSchema: {
       type: "object",
       properties: {
@@ -1018,13 +1096,15 @@ const tools: Tool[] = [
           type: "string",
           enum: ["text", "binary", "recognition", "metadata"],
           description:
-            "View to return (default: text). binary = base64 body; recognition = OCR data; metadata = info without the body.",
+            "View (default: text). text = PDF text layers and image OCR; binary = raw bytes as base64; " +
+            "recognition = Evernote OCR items plus extractedText; metadata = filename/mime/size/hash/hasRecognition without the body.",
           default: "text",
         },
         saveToPath: {
           type: "string",
           description:
-            "Optional local path to write the result (must be under allowed file roots). binary writes the file bytes; text writes extracted text; recognition/metadata write JSON.",
+            "Optional local path to write the result (must be under allowed file roots; overwrites if the file exists). " +
+            "binary writes the file bytes; text writes extracted text; recognition/metadata write JSON.",
         },
       },
       required: ["guid"],
@@ -1032,6 +1112,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_add_resource_to_note",
+    title: "Add attachment",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       "Attach a file to an existing note. Provide filePath, or content (base64) plus filename. Optional mimeType; otherwise detected from the filename. Max 200 MiB (free accounts may be rejected at 25 MiB).",
     inputSchema: {
@@ -1064,6 +1151,13 @@ const tools: Tool[] = [
   // Notebook update tool
   {
     name: "evernote_update_notebook",
+    title: "Update notebook",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description: "Update notebook name or stack",
     inputSchema: {
       type: "object",
@@ -1087,6 +1181,13 @@ const tools: Tool[] = [
   // Tag update tool
   {
     name: "evernote_update_tag",
+    title: "Update tag",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description: "Update tag name or parent",
     inputSchema: {
       type: "object",
@@ -1116,6 +1217,12 @@ const tools: Tool[] = [
 const legacyTools: Tool[] = [
   {
     name: "evernote_list_note_resources",
+    title: "List note attachments",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_note; its resources[] lists attachments] List all resources (attachments) in a note.",
     inputSchema: {
@@ -1128,6 +1235,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_resource_recognition",
+    title: "Get attachment recognition",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_resource with as:\"recognition\"] Get OCR/text recognition data from an image resource.",
     inputSchema: {
@@ -1140,6 +1253,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_resource_text",
+    title: "Get attachment text",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_resource with as:\"text\"] Extract plain text from a resource attachment (PDF text layers and Evernote OCR for images).",
     inputSchema: {
@@ -1155,42 +1274,88 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_start_polling",
+    title: "Start polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"start"] Start polling for Evernote changes.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_stop_polling",
+    title: "Stop polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"stop"] Stop polling for Evernote changes.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_poll_now",
+    title: "Poll now",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"poll"] Check for Evernote changes immediately.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_polling_status",
+    title: "Polling status",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"status"] Get the current polling configuration and status.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_get_user_info",
+    title: "Get user info",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"user"] Get current user information and quota.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_revoke_auth",
+    title: "Revoke authentication",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"revoke"] Revoke stored authentication token.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_health_check",
+    title: "Connection status",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"status"] Check the health and status of the Evernote MCP server.',
     inputSchema: {
@@ -1206,12 +1371,25 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_reconnect",
+    title: "Reconnect",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"reconnect"] Force reconnection to Evernote.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_get_notebook",
+    title: "Get notebook",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_list_notebooks with name or guid] Get notebook details by name or GUID.",
     inputSchema: {
@@ -1224,6 +1402,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_tag",
+    title: "Get tag",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_list_tags with name or guid] Get tag details by name or GUID.",
     inputSchema: {
@@ -1236,6 +1420,13 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_patch_note",
+    title: "Patch note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_update_note with replacements[]] Apply targeted find-and-replace edits to a note.",
     inputSchema: {

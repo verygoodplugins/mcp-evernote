@@ -246,6 +246,14 @@ describe("HTTP app (Streamable HTTP) with a stub MCP server", () => {
     expect(await res.json()).toEqual({ status: "ok" });
   });
 
+  it("serves /health as an unauthenticated alias of /healthz", async () => {
+    const res = await fetch(`${base}/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ status: "ok" });
+    expect(Object.keys(body)).toEqual(["status"]);
+  });
+
   it("rejects /mcp without a key or with a bad key", async () => {
     const none = await fetch(`${base}/mcp`, {
       method: "POST",

@@ -13,7 +13,7 @@
  * Endpoints:
  * - `POST|GET|DELETE /mcp` — MCP Streamable HTTP (stateful sessions).
  * - `GET /metrics` — queue metrics + session counts (authenticated).
- * - `GET /healthz` — liveness only, unauthenticated, no details.
+ * - `GET /health` — liveness only, unauthenticated, no details (`/healthz` is an alias).
  *
  * `/mcp` and `/metrics` are rate limited per authenticated caller; requests
  * with a missing or invalid key share one bucket
@@ -237,9 +237,11 @@ export function createHttpApp(options: HttpServerOptions): HttpApp {
     app.use(localhostHostValidation());
   }
 
-  app.get("/healthz", (_req, res) => {
+  const health = (_req: Request, res: Response) => {
     res.json({ status: "ok" });
-  });
+  };
+  app.get("/health", health);
+  app.get("/healthz", health);
 
   const requireCaller = (req: Request, res: Response, next: NextFunction) => {
     if (options.allowUnauthenticated) {

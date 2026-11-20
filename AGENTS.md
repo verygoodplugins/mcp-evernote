@@ -91,7 +91,7 @@ The server uses the classic MCP SDK pattern: a `Server` instance with
 ```
 src/
 ├── index.ts            # MCP server entry: tool definitions + handlers, createEvernoteServer() factory, stdio/HTTP switch, polling wiring
-├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /metrics; no Evernote imports
+├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /health and /healthz, /metrics; no Evernote imports
 ├── http.ts             # `mcp-evernote-http` bin: index.ts with --http
 ├── request-queue.ts    # Shared Evernote request queue: concurrency, pacing, shared rate-limit backoff, metrics
 ├── concurrency.ts      # RPC limit option resolution + Semaphore; limitNoteStoreMethods wraps a store in its own queue
@@ -122,7 +122,9 @@ directly in `evernote-api.ts`.
 ## MCP Tools
 
 The server defines **15 tools**, all prefixed `evernote_` (defined in the
-`tools` array in `src/index.ts`). They cover notes (`create_note`,
+`tools` array in `src/index.ts`). Each advertised tool has a `title` plus
+honest MCP annotations (`readOnlyHint`, `destructiveHint`, and
+`idempotentHint` / `openWorldHint` where they apply). They cover notes (`create_note`,
 `get_note`, `update_note`, `delete_note`, `search_notes`), notebooks
 (`list_notebooks`, `create_notebook`, `update_notebook`), tags (`list_tags`,
 `create_tag`, `update_tag`), resources/attachments (`get_resource`,
