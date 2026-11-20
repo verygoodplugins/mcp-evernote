@@ -91,7 +91,7 @@ The server uses the classic MCP SDK pattern: a `Server` instance with
 ```
 src/
 ├── index.ts            # MCP server entry: tool definitions + handlers, createEvernoteServer() factory, stdio/HTTP switch, polling wiring
-├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /metrics; no Evernote imports
+├── http-server.ts      # Streamable HTTP app: caller-key auth, sessions, /health and /healthz, /metrics; no Evernote imports
 ├── http.ts             # `mcp-evernote-http` bin: index.ts with --http
 ├── request-queue.ts    # Shared Evernote request queue: concurrency, pacing, shared rate-limit backoff, metrics
 ├── concurrency.ts      # RPC limit option resolution + Semaphore; limitNoteStoreMethods wraps a store in its own queue
@@ -122,7 +122,9 @@ directly in `evernote-api.ts`.
 ## MCP Tools
 
 The server defines **15 tools**, all prefixed `evernote_` (defined in the
-`tools` array in `src/index.ts`). They cover notes (`create_note`,
+`tools` array in `src/index.ts`). Each advertised tool has a `title` plus
+honest MCP annotations (`readOnlyHint`, `destructiveHint`, and
+`idempotentHint` / `openWorldHint` where they apply). They cover notes (`create_note`,
 `get_note`, `update_note`, `delete_note`, `search_notes`), notebooks
 (`list_notebooks`, `create_notebook`, `update_notebook`), tags (`list_tags`,
 `create_tag`, `update_tag`), resources/attachments (`get_resource`,
@@ -131,17 +133,22 @@ The server defines **15 tools**, all prefixed `evernote_` (defined in the
 
 **Consolidated surface (was 27).** Read/lifecycle operations are parameterized
 rather than multiplied into separate tools:
-- `get_resource({guid, as})` projects one attachment through `as: "text"`
-  (default; PDF/OCR extraction) | `"binary"` (base64) | `"recognition"` (OCR
-  data) | `"metadata"` (filename/mime/size/hash/hasRecognition). Replaces the
-  old `get_resource_text` / `get_resource_recognition` tools; a note's
-  attachment list comes from `get_note`'s `resources[]` (so no
+- `get_resource({guid, as, saveToPath})` projects one attachment through
+  `as: "text"` (default; PDF/OCR extraction) | `"binary"` (base64) |
+  `"recognition"` (OCR data) | `"metadata"` (filename/mime/size/hash/
+  hasRecognition). Optional `saveToPath` writes the result to a local file.
+  Replaces the old `get_resource_text` / `get_resource_recognition` tools; a
+  note's attachment list comes from `get_note`'s `resources[]` (so no
   `list_note_resources`).
 - `list_notebooks` / `list_tags` return the full list, or one entity when
   passed a `name` or `guid` (absorbing the old `get_notebook` / `get_tag`).
 - `update_note` takes `replacements[]` for targeted find-and-replace (patch
   mode, mutually exclusive with the full-field inputs) — absorbing the old
-  `patch_note`.
+  `patch_note`. `addTags`/`removeTags` add or remove tags without replacing
+  the rest. `guids` + `notebookName` moves up to 25 notes.
+- `delete_note({guid, action: trash|restore})` moves a note to the trash
+  (default) or restores it. This is not a permanent delete.
+- `add_resource_to_note` accepts `filePath` or base64 `content` + `filename`.
 - `polling({action: start|stop|poll|status})` and
   `connection({action: status|user|reconnect|revoke})` replace the four
   polling command tools and the four `health_check`/`get_user_info`/
@@ -154,6 +161,20 @@ deprecation notice. They are hidden from `ListTools` by default; set
 `EVERNOTE_LEGACY_TOOLS=true` to re-advertise them during a migration window.
 See `MIGRATION.md` for the full old→new mapping.
 
+**Agent guardrails** (pure helpers in `src/tool-guards.ts`, unit tested):
+- Destructive operations are opt-in. `delete_note`, `connection`
+  `action:"revoke"`, and the `revoke_auth` alias are removed from `ListTools`
+  and refused by `CallTool` unless `EVERNOTE_ENABLE_DESTRUCTIVE=true`
+  (`applyDestructiveGate` / `destructiveCallError`), so the default surface is
+  14 tools and `connection` is advertised non-destructive.
+- Notebook names on `create_note` / `update_note` must exist (exact, then
+  unique case-insensitive match). Unknown names fail with close matches unless
+  `createNotebook: true`; resolution happens before any write.
+- `list_tags` takes `query` / `limit` / `offset` and then returns
+  `{ total, hasMore, nextOffset, tags }`; with none it returns the plain array.
+- `get_note` returns extracted attachment text only as
+  `resources[].attachmentText` (no `pdfText` / `ocrText` duplicates).
+
 Many tools accept user-friendly names but resolve to Evernote GUIDs
 internally (notebook names → GUIDs via `listNotebooks()`, tag names → GUIDs
 via `listTags()`, including hierarchical parent-tag resolution).
@@ -164,7 +185,8 @@ takes either `guid` (single, full detail incl. attachment text) or `guids` (a
 `get_note` and `search_notes` take a `format` of `markdown` | `text` | `enml`;
 `search_notes` takes `offset` + `includeContent` for paged full-text export
 (`query:"*"` + `notebookName` + `includeContent`, page until `hasMore` is
-false) — so there is no separate `get_notes_batch` or `export_notebook` tool.
+false) — so there is no separate `get_notes_batch`, `export_notebook`,
+`move_notes`, or `restore_note` tool.
 Multi-note responses are bounded by `EVERNOTE_MAX_RESPONSE_CHARS`.
 
 ## Authentication

@@ -4,7 +4,11 @@ export const CreateNoteSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   content: z.string(),
   notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
+  createNotebook: z.boolean().optional().default(false),
   tags: z.array(z.string()).optional(),
+}).refine(data => !data.createNotebook || data.notebookName !== undefined, {
+  message: 'createNotebook requires notebookName',
+  path: ['createNotebook'],
 });
 
 const NoteFormatSchema = z.enum(['markdown', 'text', 'enml']);
@@ -49,17 +53,30 @@ const NoteReplacementSchema = z.object({
 // update_note has two modes: a full-field update (title/content/tags/notebook)
 // or, when `replacements` is present, a targeted find-and-replace patch that
 // leaves title/tags/notebook/attachments untouched. The two are mutually
-// exclusive.
+// exclusive. Additive tag edits (addTags/removeTags) and batch moves
+// (guids + notebookName) are also handled here so those jobs don't need
+// their own tools.
 export const UpdateNoteSchema = z.object({
-  guid: z.string().min(1, 'GUID is required'),
+  guid: z.string().min(1, 'GUID is required').optional(),
+  guids: z.array(z.string().min(1)).min(1).max(25).optional(),
   title: z.string().optional(),
   content: z.string().optional(),
   notebookName: z.string().trim().min(1, 'Notebook name cannot be empty').optional(),
+  createNotebook: z.boolean().optional().default(false),
   tags: z.array(z.string()).optional(),
+  addTags: z.array(z.string().min(1)).min(1).optional(),
+  removeTags: z.array(z.string().min(1)).min(1).optional(),
   forceUpdate: z.boolean().optional().default(false),
   forceUpdateConfirmation: z.string().optional(),
   replacements: z.array(NoteReplacementSchema).min(1, 'At least one replacement is required').optional(),
 }).superRefine((data, ctx) => {
+  if (!!data.guid === !!data.guids) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['guid'],
+      message: 'Provide exactly one of guid or guids (max 25)',
+    });
+  }
   if (
     data.forceUpdate &&
     data.forceUpdateConfirmation !== 'I understand this will delete the original note'
@@ -71,18 +88,35 @@ export const UpdateNoteSchema = z.object({
         'forceUpdate requires forceUpdateConfirmation set to exactly: "I understand this will delete the original note"',
     });
   }
+  if (data.createNotebook && data.notebookName === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['createNotebook'],
+      message: 'createNotebook requires notebookName',
+    });
+  }
+  const hasAdditiveTags =
+    data.addTags !== undefined || data.removeTags !== undefined;
+  if (data.tags !== undefined && hasAdditiveTags) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['tags'],
+      message: 'tags (replace all) cannot be combined with addTags or removeTags',
+    });
+  }
   if (
     data.replacements &&
     (data.title !== undefined ||
       data.content !== undefined ||
       data.tags !== undefined ||
-      data.notebookName !== undefined)
+      data.notebookName !== undefined ||
+      hasAdditiveTags)
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['replacements'],
       message:
-        'replacements (patch mode) cannot be combined with title, content, tags, or notebookName',
+        'replacements (patch mode) cannot be combined with title, content, tags, addTags, removeTags, or notebookName',
     });
   }
   // Patch mode routes through patchNoteContent and never reaches the
@@ -96,10 +130,41 @@ export const UpdateNoteSchema = z.object({
         'forceUpdate is not supported in patch mode (replacements); omit it or use a full-field update',
     });
   }
+  if (data.guids) {
+    if (
+      data.title !== undefined ||
+      data.content !== undefined ||
+      data.tags !== undefined ||
+      data.replacements !== undefined ||
+      data.forceUpdate
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guids'],
+        message:
+          'Batch update (guids) only supports notebookName, addTags, and removeTags',
+      });
+    }
+    if (
+      data.notebookName === undefined &&
+      data.addTags === undefined &&
+      data.removeTags === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['guids'],
+        message:
+          'Batch update requires notebookName and/or addTags/removeTags',
+      });
+    }
+  }
 });
 
 export const DeleteNoteSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
+  // deleteNote moves to the trash; restore sets Note.active = true.
+  // Third-party apps cannot expunge (permanent delete).
+  action: z.enum(['trash', 'restore']).optional().default('trash'),
 });
 
 export const CreateNotebookSchema = z.object({
@@ -119,6 +184,7 @@ export const GetResourceSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),
   as: z.enum(['text', 'binary', 'recognition', 'metadata']).optional(),
   includeData: z.boolean().optional(),
+  saveToPath: z.string().min(1, 'saveToPath cannot be empty').optional(),
 }).transform(data => ({
   guid: data.guid,
   as:
@@ -128,12 +194,30 @@ export const GetResourceSchema = z.object({
       : data.includeData
         ? 'binary'
         : 'metadata'),
+  saveToPath: data.saveToPath,
 }));
 
 export const AddResourceToNoteSchema = z.object({
   noteGuid: z.string().min(1, 'Note GUID is required'),
-  filePath: z.string().min(1, 'File path is required'),
-  filename: z.string().optional(),
+  filePath: z.string().min(1, 'File path is required').optional(),
+  content: z.string().min(1, 'content cannot be empty').optional(),
+  filename: z.string().min(1, 'filename cannot be empty').optional(),
+  mimeType: z.string().min(1, 'mimeType cannot be empty').optional(),
+}).superRefine((data, ctx) => {
+  if (!!data.filePath === !!data.content) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['filePath'],
+      message: 'Provide exactly one of filePath or content (base64)',
+    });
+  }
+  if (data.content && !data.filename) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['filename'],
+      message: 'filename is required when uploading via content',
+    });
+  }
 });
 
 // Retired but kept as a hidden, shape-exact legacy handler (see tool-aliases.ts).
@@ -159,10 +243,23 @@ export const UpdateNotebookSchema = z.object({
 // list_tags lists all tags, or returns one (fresh, full detail) when name or
 // guid is given — absorbing the retired get_tag. name/guid must be non-empty
 // when present so an empty-string lookup errors instead of silently listing all.
+// query/limit/offset switch the list to a filtered, paged { total, tags } shape;
+// with none of them the plain full array is returned (backward compatible).
 export const ListTagsSchema = z.object({
   name: z.string().min(1, 'name must not be empty').optional(),
   guid: z.string().min(1, 'guid must not be empty').optional(),
-});
+  query: z.string().trim().min(1, 'query must not be empty').optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+  offset: z.number().int().min(0).optional(),
+}).refine(
+  data =>
+    !(data.name || data.guid) ||
+    (data.query === undefined && data.limit === undefined && data.offset === undefined),
+  {
+    message: 'name/guid (single-tag lookup) cannot be combined with query, limit, or offset',
+    path: ['query'],
+  },
+);
 
 export const UpdateTagSchema = z.object({
   guid: z.string().min(1, 'GUID is required'),

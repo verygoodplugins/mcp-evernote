@@ -15,6 +15,15 @@ import { EvernoteAPI, BatchFetchResult } from "./evernote-api.js";
 import { EvernoteConfig, NotebookInfo } from "./types.js";
 import { validateToolArgs } from "./tool-schemas.js";
 import { resolveToolAlias } from "./tool-aliases.js";
+import {
+  applyDestructiveGate,
+  destructiveCallError,
+  findNotebookByName,
+  isDestructiveEnabled,
+  pageTags,
+  unknownNotebookMessage,
+  wantsTagPage,
+} from "./tool-guards.js";
 import { computeWebhookSignature } from "./webhook.js";
 import {
   buildToolErrorPayload,
@@ -49,6 +58,8 @@ import {
   buildWebhookPayload,
   checkForPollingChanges,
 } from "./polling.js";
+import { writeFile } from "fs/promises";
+import { validateWritableFilePath } from "./path-security.js";
 
 // CJS shim: package-local require (not cwd/argv) so global bin installs work.
 const { silenceEvernoteStdio } = createRequire(import.meta.url)(
@@ -112,6 +123,9 @@ const POLLING_ENABLED = process.env.EVERNOTE_POLLING_ENABLED === "true";
 // clients during the deprecation window. Retired names always stay callable via
 // TOOL_ALIASES regardless of this flag — it only controls visibility.
 const LEGACY_TOOLS_ENABLED = process.env.EVERNOTE_LEGACY_TOOLS === "true";
+// Trash/restore (delete_note) and token revocation (connection action:"revoke")
+// are only advertised and callable when EVERNOTE_ENABLE_DESTRUCTIVE=true.
+const DESTRUCTIVE_TOOLS_ENABLED = isDestructiveEnabled();
 
 // Evernote RPC queue tuning. Bounding concurrency keeps a wide fan-out from
 // bursting past Evernote's hourly rate limit; pacing spaces dispatches; short
@@ -654,6 +668,13 @@ function getPollingStatus(): any {
 const tools: Tool[] = [
   {
     name: "evernote_create_note",
+    title: "Create note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new note in Evernote",
     inputSchema: {
       type: "object",
@@ -668,7 +689,13 @@ const tools: Tool[] = [
         },
         notebookName: {
           type: "string",
-          description: "Name of the notebook to create the note in (optional)",
+          description:
+            "Name of an existing notebook (optional). Unknown names are rejected with close matches unless createNotebook is true.",
+        },
+        createNotebook: {
+          type: "boolean",
+          description: "Create notebookName if it does not exist (default: false).",
+          default: false,
         },
         tags: {
           type: "array",
@@ -681,10 +708,16 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_search_notes",
+    title: "Search notes",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Search notes. Returns note metadata plus `totalNotes`; page through results with `offset`/`nextOffset`. " +
-      "Set `includeContent: true` to include full bodies (each body costs one API call, so page size is capped at 25). " +
-      'To export a whole notebook as text: query "*", set notebookName + includeContent, and page with offset until hasMore is false.',
+      "Search notes. Returns metadata plus totalNotes; page with offset/nextOffset. " +
+      "includeContent adds full bodies (page size capped at 25). " +
+      'To export a notebook: query "*", set notebookName + includeContent, and page until hasMore is false.',
     inputSchema: {
       type: "object",
       properties: {
@@ -733,11 +766,15 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_get_note",
+    title: "Get note",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Get one or more notes. Provide exactly one of `guid` (single note, full detail including attachment/OCR text) " +
-      "or `guids` (batch of up to 25, body-focused: metadata + content only, no attachment text — use single `guid` for that). " +
-      "Batch mode returns { notes, failed?, aborted? } and, if the hourly rate limit hits mid-batch, stops with partial " +
-      "results plus the guids left to resume.",
+      "Get a note by guid (full detail, including attachment/OCR text) or a batch by guids (up to 25, body only). " +
+      "A mid-batch rate limit returns partial results plus the remaining guids to resume.",
     inputSchema: {
       type: "object",
       properties: {
@@ -784,14 +821,30 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_update_note",
+    title: "Update note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
-      "Update an existing note. Full-update mode: pass title/content/tags/notebookName to replace those fields. Patch mode: pass replacements[] to apply targeted find-and-replace edits while preserving title, tags, notebook, and attachments — ideal for small changes like a status or date. The two modes are mutually exclusive.",
+      "Update a note's title, content, tags, or notebook, or move/tag a batch with guids. " +
+      "addTags/removeTags are additive (missing names are created). " +
+      "replacements[] is a find-and-replace patch that keeps attachments. Modes are mutually exclusive.",
     inputSchema: {
       type: "object",
       properties: {
         guid: {
           type: "string",
-          description: "Note GUID",
+          description: "Single note GUID (mutually exclusive with guids)",
+        },
+        guids: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 25,
+          description:
+            "Batch of note GUIDs, max 25 (mutually exclusive with guid). Only notebookName, addTags, and removeTags are allowed.",
         },
         title: {
           type: "string",
@@ -803,12 +856,28 @@ const tools: Tool[] = [
         },
         notebookName: {
           type: "string",
-          description: "Move note to this notebook (full-update mode)",
+          description:
+            "Move the note(s) to this existing notebook. Unknown names are rejected with close matches unless createNotebook is true.",
+        },
+        createNotebook: {
+          type: "boolean",
+          description: "Create notebookName if it does not exist (default: false).",
+          default: false,
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "New tags, replacing existing tags (full-update mode)",
+          description: "New tags, replacing existing tags (full-update mode). Mutually exclusive with addTags/removeTags.",
+        },
+        addTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to add without removing others (names or GUIDs). Missing names are created.",
+        },
+        removeTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags to remove without touching others (names or GUIDs).",
         },
         replacements: {
           type: "array",
@@ -846,12 +915,20 @@ const tools: Tool[] = [
             'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
         },
       },
-      required: ["guid"],
+      required: [],
     },
   },
   {
     name: "evernote_delete_note",
-    description: "Delete a note",
+    title: "Delete or restore note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    description:
+      "Move a note to the trash (default action:\"trash\") or restore it with action:\"restore\". This is not a permanent delete; third-party apps cannot expunge notes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -859,12 +936,24 @@ const tools: Tool[] = [
           type: "string",
           description: "Note GUID",
         },
+        action: {
+          type: "string",
+          enum: ["trash", "restore"],
+          description: 'trash (default) moves the note to the trash; restore brings a trashed note back.',
+          default: "trash",
+        },
       },
       required: ["guid"],
     },
   },
   {
     name: "evernote_list_notebooks",
+    title: "List notebooks",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "List all notebooks, or get one notebook's full detail by passing its name or guid.",
     inputSchema: {
@@ -883,6 +972,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_create_notebook",
+    title: "Create notebook",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new notebook",
     inputSchema: {
       type: "object",
@@ -901,8 +997,16 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_list_tags",
+    title: "List tags",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
-      "List all tags, or get one tag's full detail by passing its name or guid.",
+      "List tags, or get one tag's full detail by name or guid. " +
+      "query/limit/offset filter and page the list, returning { total, hasMore, nextOffset, tags }; " +
+      "with none of them the full tag array is returned.",
     inputSchema: {
       type: "object",
       properties: {
@@ -914,11 +1018,30 @@ const tools: Tool[] = [
           type: "string",
           description: "If set, return just this tag (looked up by GUID).",
         },
+        query: {
+          type: "string",
+          description: "Case-insensitive substring filter on tag names.",
+        },
+        limit: {
+          type: "number",
+          description: "Max tags per page (1-1000). Default: all matches.",
+        },
+        offset: {
+          type: "number",
+          description: "Tags to skip (default: 0). Use nextOffset to page.",
+        },
       },
     },
   },
   {
     name: "evernote_create_tag",
+    title: "Create tag",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description: "Create a new tag",
     inputSchema: {
       type: "object",
@@ -937,6 +1060,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_connection",
+    title: "Manage connection",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       'Manage the Evernote connection and account. action: "status" runs a health/diagnostic check (auth state, config), "user" returns the account profile + quota, "reconnect" forces reinitialization (useful when "Not connected" errors persist), "revoke" clears the stored auth token.',
     inputSchema: {
@@ -959,6 +1089,13 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_polling",
+    title: "Manage polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       'Manage background polling for Evernote changes (detected changes are sent to the configured webhook). action: "start" begins polling, "stop" halts it, "poll" checks once immediately, "status" returns the current polling configuration and state.',
     inputSchema: {
@@ -976,8 +1113,16 @@ const tools: Tool[] = [
   // Resource tools
   {
     name: "evernote_get_resource",
+    title: "Get attachment",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
-      "Get an attachment by GUID, projected through one view. as:'text' (default) extracts plain text — PDF text layers and image OCR; as:'binary' returns the raw bytes as base64; as:'recognition' returns Evernote's raw OCR items plus a combined extractedText; as:'metadata' returns filename/mime/size/hash/hasRecognition without the body. To list a note's attachments, call evernote_get_note — its resources[] enumerates each attachment's metadata.",
+      "Get an attachment by GUID as text (default; PDF/OCR), binary (base64), recognition, or metadata. " +
+      "Optional saveToPath writes the result under allowed roots. To list a note's attachments, use evernote_get_note resources[].",
     inputSchema: {
       type: "object",
       properties: {
@@ -989,8 +1134,15 @@ const tools: Tool[] = [
           type: "string",
           enum: ["text", "binary", "recognition", "metadata"],
           description:
-            "View to return (default: text). binary = base64 body; recognition = OCR data; metadata = info without the body.",
+            "View (default: text). text = PDF text layers and image OCR; binary = raw bytes as base64; " +
+            "recognition = Evernote OCR items plus extractedText; metadata = filename/mime/size/hash/hasRecognition without the body.",
           default: "text",
+        },
+        saveToPath: {
+          type: "string",
+          description:
+            "Optional local path to write the result (must be under allowed file roots; overwrites if the file exists). " +
+            "binary writes the file bytes; text writes extracted text; recognition/metadata write JSON.",
         },
       },
       required: ["guid"],
@@ -998,7 +1150,15 @@ const tools: Tool[] = [
   },
   {
     name: "evernote_add_resource_to_note",
-    description: "Add a file/image attachment to an existing note",
+    title: "Add attachment",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    description:
+      "Attach a file to an existing note. Provide filePath, or content (base64) plus filename. Optional mimeType; otherwise detected from the filename. Max 200 MiB (free accounts may be rejected at 25 MiB).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1008,19 +1168,34 @@ const tools: Tool[] = [
         },
         filePath: {
           type: "string",
-          description: "Local file path to attach",
+          description: "Local file path to attach (mutually exclusive with content)",
+        },
+        content: {
+          type: "string",
+          description: "Base64-encoded file body (mutually exclusive with filePath). Requires filename.",
         },
         filename: {
           type: "string",
-          description: "Optional display filename (defaults to file basename)",
+          description: "Display filename (required with content; defaults to the file basename when using filePath)",
+        },
+        mimeType: {
+          type: "string",
+          description: "MIME type override; otherwise detected from the filename",
         },
       },
-      required: ["noteGuid", "filePath"],
+      required: ["noteGuid"],
     },
   },
   // Notebook update tool
   {
     name: "evernote_update_notebook",
+    title: "Update notebook",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description: "Update notebook name or stack",
     inputSchema: {
       type: "object",
@@ -1044,6 +1219,13 @@ const tools: Tool[] = [
   // Tag update tool
   {
     name: "evernote_update_tag",
+    title: "Update tag",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description: "Update tag name or parent",
     inputSchema: {
       type: "object",
@@ -1073,6 +1255,12 @@ const tools: Tool[] = [
 const legacyTools: Tool[] = [
   {
     name: "evernote_list_note_resources",
+    title: "List note attachments",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_note; its resources[] lists attachments] List all resources (attachments) in a note.",
     inputSchema: {
@@ -1085,6 +1273,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_resource_recognition",
+    title: "Get attachment recognition",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_resource with as:\"recognition\"] Get OCR/text recognition data from an image resource.",
     inputSchema: {
@@ -1097,6 +1291,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_resource_text",
+    title: "Get attachment text",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_get_resource with as:\"text\"] Extract plain text from a resource attachment (PDF text layers and Evernote OCR for images).",
     inputSchema: {
@@ -1112,42 +1312,88 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_start_polling",
+    title: "Start polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"start"] Start polling for Evernote changes.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_stop_polling",
+    title: "Stop polling",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"stop"] Stop polling for Evernote changes.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_poll_now",
+    title: "Poll now",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"poll"] Check for Evernote changes immediately.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_polling_status",
+    title: "Polling status",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_polling with action:"status"] Get the current polling configuration and status.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_get_user_info",
+    title: "Get user info",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"user"] Get current user information and quota.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_revoke_auth",
+    title: "Revoke authentication",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"revoke"] Revoke stored authentication token.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_health_check",
+    title: "Connection status",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"status"] Check the health and status of the Evernote MCP server.',
     inputSchema: {
@@ -1163,12 +1409,25 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_reconnect",
+    title: "Reconnect",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       '[DEPRECATED — use evernote_connection with action:"reconnect"] Force reconnection to Evernote.',
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "evernote_get_notebook",
+    title: "Get notebook",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_list_notebooks with name or guid] Get notebook details by name or GUID.",
     inputSchema: {
@@ -1181,6 +1440,12 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_get_tag",
+    title: "Get tag",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_list_tags with name or guid] Get tag details by name or GUID.",
     inputSchema: {
@@ -1193,6 +1458,13 @@ const legacyTools: Tool[] = [
   },
   {
     name: "evernote_patch_note",
+    title: "Patch note",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       "[DEPRECATED — use evernote_update_note with replacements[]] Apply targeted find-and-replace edits to a note.",
     inputSchema: {
@@ -1231,7 +1503,10 @@ async function handleListTools() {
     logError: (message) => console.error(message),
   });
 
-  const advertised = LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools;
+  const advertised = applyDestructiveGate(
+    LEGACY_TOOLS_ENABLED ? [...tools, ...legacyTools] : tools,
+    DESTRUCTIVE_TOOLS_ENABLED,
+  );
   return { tools: enrichToolsWithNotebookDescriptions(advertised, notebookCache) };
 }
 
@@ -1247,6 +1522,39 @@ function warnDeprecatedAlias(oldName: string, canonical: string): void {
   );
 }
 
+/**
+ * Resolve a target notebook by name for create/move. Unknown names are
+ * rejected with close matches unless createNotebook is true — a typo must
+ * never silently create a new notebook.
+ */
+async function resolveTargetNotebook(
+  evernoteApi: EvernoteAPI,
+  notebookName: string,
+  createNotebook: boolean,
+): Promise<{ guid: string | undefined; warning?: string }> {
+  const notebooks = await evernoteApi.listNotebooks();
+  notebookCache = notebooks;
+  const { notebook, suggestions } = findNotebookByName(notebooks, notebookName);
+  if (notebook) {
+    return { guid: notebook.guid };
+  }
+  if (!createNotebook) {
+    throw new Error(unknownNotebookMessage(notebookName, suggestions));
+  }
+  try {
+    const created = await evernoteApi.createNotebook(notebookName);
+    clearEntityCaches();
+    return {
+      guid: created.guid,
+      warning: `Notebook "${notebookName}" did not exist and was created (createNotebook: true).`,
+    };
+  } catch (createError) {
+    throw new Error(
+      `Notebook "${notebookName}" does not exist and could not be created (${errorMessage(createError)})`,
+    );
+  }
+}
+
 // Call tool handler
 async function handleCallTool(request: CallToolRequest): Promise<any> {
   // Resolve a possibly-retired tool name to its canonical form BEFORE
@@ -1257,6 +1565,20 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
   const args = resolved.args;
   if (resolved.aliased) {
     warnDeprecatedAlias(request.params.name, name);
+  }
+
+  // Destructive operations are opt-in (EVERNOTE_ENABLE_DESTRUCTIVE=true).
+  const gateError = destructiveCallError(
+    name,
+    args,
+    DESTRUCTIVE_TOOLS_ENABLED,
+    request.params.name,
+  );
+  if (gateError) {
+    return {
+      content: [{ type: "text", text: gateError }],
+      isError: true,
+    };
   }
 
   // Legacy input guard: preserve a retired tool's stricter "at least one of"
@@ -1588,35 +1910,19 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
     switch (name) {
       case "evernote_create_note": {
-        const { title, content, notebookName, tags } = validatedArgs;
+        const { title, content, notebookName, createNotebook, tags } =
+          validatedArgs;
 
         let notebookGuid: string | undefined;
         let notebookWarning: string | undefined;
 
         if (notebookName) {
-          const notebooks = await evernoteApi.listNotebooks();
-          notebookCache = notebooks;
-          const notebook = notebooks.find((nb) => nb.name === notebookName);
-          if (notebook) {
-            notebookGuid = notebook.guid;
-          } else {
-            // Notebook doesn't exist — auto-create it
-            try {
-              const newNotebook =
-                await evernoteApi.createNotebook(notebookName);
-              notebookGuid = newNotebook.guid;
-              notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-              clearEntityCaches();
-            } catch (createError) {
-              // Auto-create failed — fall back to the default notebook
-              const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
-              notebookGuid = defaultNb?.guid;
-              const fallbackName = defaultNb?.name || "the default notebook";
-              notebookWarning =
-                `Notebook "${notebookName}" does not exist and could not be auto-created ` +
-                `(${errorMessage(createError)}). Note was placed in "${fallbackName}" instead.`;
-            }
-          }
+          ({ guid: notebookGuid, warning: notebookWarning } =
+            await resolveTargetNotebook(
+              evernoteApi,
+              notebookName,
+              createNotebook,
+            ));
         }
 
         const note = await evernoteApi.createNote({
@@ -1718,8 +2024,14 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             const enhanced: any = {
               guid: note.guid,
               title: note.title,
-              created: new Date(note.created).toISOString(),
-              updated: new Date(note.updated).toISOString(),
+              created:
+                note.created != null
+                  ? new Date(note.created).toISOString()
+                  : undefined,
+              updated:
+                note.updated != null
+                  ? new Date(note.updated).toISOString()
+                  : undefined,
               contentLength: note.contentLength,
               notebookGuid: note.notebookGuid,
             };
@@ -1976,12 +2288,9 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
                   r.guid,
                   r,
                 );
+                // attachmentText only: the legacy pdfText/ocrText mirrors
+                // doubled the payload (removed as a breaking change).
                 resourceInfo.attachmentText = attachmentText;
-                if (r.mime === "application/pdf") {
-                  resourceInfo.pdfText = attachmentText;
-                } else {
-                  resourceInfo.ocrText = attachmentText;
-                }
               } catch (error) {
                 const meta = getEvernoteErrorMeta(error);
                 if (isAuthFailure(error) || meta.errorCode === 19) {
@@ -2011,10 +2320,14 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       case "evernote_update_note": {
         const {
           guid,
+          guids,
           title,
           content,
           notebookName,
+          createNotebook = false,
           tags,
+          addTags,
+          removeTags,
           forceUpdate = false,
           replacements,
         } = validatedArgs;
@@ -2050,9 +2363,86 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           };
         }
 
+        // Resolve the target notebook up front, before any write (including
+        // addTags creating tags), so an unknown name fails cleanly.
+        const targetNotebook =
+          notebookName !== undefined
+            ? await resolveTargetNotebook(
+                evernoteApi,
+                notebookName,
+                createNotebook,
+              )
+            : undefined;
+
+        // Batch move / additive tags, or a single-note metadata-only edit
+        // (no title/content/replace-all tags/forceUpdate). Resolves the
+        // official move_notes and update_note_tags tools onto update_note.
+        const isMetadataOnly =
+          title === undefined &&
+          content === undefined &&
+          tags === undefined &&
+          !forceUpdate &&
+          (notebookName !== undefined ||
+            addTags !== undefined ||
+            removeTags !== undefined);
+        if (guids || isMetadataOnly) {
+          const ids: string[] = guids ?? [guid];
+          const targetNotebookGuid = targetNotebook?.guid;
+          const notebookWarning = targetNotebook?.warning;
+          let result;
+          try {
+            result = await evernoteApi.updateNotesMetadata({
+              guids: ids,
+              notebookGuid: targetNotebookGuid,
+              addTags,
+              removeTags,
+            });
+          } finally {
+            // addTags may have created tags; bust the list cache even if a
+            // later note in the batch failed or the call threw.
+            if (addTags) {
+              clearEntityCaches();
+            }
+          }
+          const summary: any = {
+            updated: result.updated,
+            failed: result.failed.length > 0 ? result.failed : undefined,
+          };
+          if (result.aborted) {
+            summary.aborted = result.aborted;
+          }
+          if (notebookWarning) {
+            summary.notebookWarning = notebookWarning;
+          }
+          if (result.updated.length === 0 && (result.failed.length > 0 || result.aborted)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `⚠️ Note update failed\n${JSON.stringify(summary, null, 2)}`,
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `✅ Updated ${result.updated.length} note(s)` +
+                  (result.failed.length
+                    ? `, ${result.failed.length} failed`
+                    : "") +
+                  `\n${JSON.stringify(summary, null, 2)}`,
+              },
+            ],
+          };
+        }
+
         console.error(`Updating note ${guid}`);
 
         let forceUpdateNotebookGuid: string | undefined;
+        let additiveTagNames: string[] | undefined;
 
         try {
           // Get existing note
@@ -2069,33 +2459,28 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
           if (tags !== undefined) {
             note.tagNames = tags;
+          } else if (addTags !== undefined || removeTags !== undefined) {
+            note.tagGuids = await evernoteApi.resolveTagChanges(
+              note.tagGuids,
+              addTags,
+              removeTags,
+            );
+            const allTags = await evernoteApi.listTags();
+            const tagNameByGuid = new Map(
+              allTags.map((tg) => [tg.guid!, tg.name!]),
+            );
+            additiveTagNames = (note.tagGuids ?? [])
+              .map((g: string) => tagNameByGuid.get(g))
+              .filter((name: string | undefined): name is string => !!name);
+            if (addTags) {
+              clearEntityCaches();
+            }
           }
 
-          let notebookWarning: string | undefined;
-          if (notebookName !== undefined) {
-            const notebooks = await evernoteApi.listNotebooks();
-            notebookCache = notebooks;
-            const notebook = notebooks.find((nb) => nb.name === notebookName);
-            if (notebook) {
-              note.notebookGuid = notebook.guid;
-            } else {
-              // Auto-create the notebook
-              try {
-                const newNotebook =
-                  await evernoteApi.createNotebook(notebookName);
-                note.notebookGuid = newNotebook.guid;
-                notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
-                clearEntityCaches();
-              } catch (createError) {
-                const defaultNb = notebooks.find((nb) => nb.defaultNotebook);
-                note.notebookGuid = defaultNb?.guid;
-                const fallbackName = defaultNb?.name || "the default notebook";
-                notebookWarning =
-                  `Notebook "${notebookName}" does not exist and could not be auto-created ` +
-                  `(${errorMessage(createError)}). Note was moved to "${fallbackName}" instead.`;
-              }
-            }
-            forceUpdateNotebookGuid = note.notebookGuid;
+          const notebookWarning = targetNotebook?.warning;
+          if (targetNotebook) {
+            note.notebookGuid = targetNotebook.guid;
+            forceUpdateNotebookGuid = targetNotebook.guid;
           }
 
           const updatedNote = await evernoteApi.updateNote(note);
@@ -2136,7 +2521,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
                   ),
                 notebookGuid:
                   forceUpdateNotebookGuid || originalNote.notebookGuid,
-                tagNames: tags || originalNote.tagNames,
+                tagNames: tags ?? additiveTagNames ?? originalNote.tagNames,
               });
 
               // Delete the old note
@@ -2167,14 +2552,26 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_delete_note": {
-        const { guid } = validatedArgs;
+        const { guid, action = "trash" } = validatedArgs;
+        if (action === "restore") {
+          const restored = await evernoteApi.restoreNote(guid);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Note ${guid} restored from the trash.\nTitle: ${restored.title ?? ""}`,
+              },
+            ],
+          };
+        }
+
         await evernoteApi.deleteNote(guid);
 
         return {
           content: [
             {
               type: "text",
-              text: `Note ${guid} deleted successfully`,
+              text: `Note ${guid} moved to the trash. Restore it with evernote_delete_note({ action: "restore" }).`,
             },
           ],
         };
@@ -2230,7 +2627,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_list_tags": {
-        const { name, guid } = validatedArgs;
+        const { name, guid, query, limit, offset } = validatedArgs;
 
         // Single-tag lookup when name/guid is given (absorbs get_tag).
         if (name || guid) {
@@ -2251,11 +2648,15 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
         }
 
         const tags = await getCachedTags(evernoteApi);
+        const pageOptions = { query, limit, offset };
+        const payload = wantsTagPage(pageOptions)
+          ? pageTags(tags, pageOptions)
+          : tags;
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(tags, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
@@ -2289,28 +2690,42 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
 
       // Resource tools
       case "evernote_get_resource": {
-        const { guid, as } = validatedArgs;
+        const { guid, as, saveToPath } = validatedArgs;
 
         if (as === "text") {
           const text = await evernoteApi.extractResourceText(guid);
+          if (saveToPath) {
+            const dest = await validateWritableFilePath(saveToPath);
+            await writeFile(dest, text, "utf8");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ text, savedToPath: dest }, null, 2),
+                },
+              ],
+            };
+          }
           return { content: [{ type: "text", text }] };
         }
 
         if (as === "recognition") {
           const recognition = await evernoteApi.getResourceRecognition(guid);
           const allText = evernoteApi.extractTextFromRecognition(recognition);
+          const recognitionResult = {
+            ...recognition,
+            extractedText: allText || "(no text recognized)",
+          };
+          if (saveToPath) {
+            const dest = await validateWritableFilePath(saveToPath);
+            await writeFile(dest, JSON.stringify(recognitionResult, null, 2), "utf8");
+            (recognitionResult as any).savedToPath = dest;
+          }
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(
-                  {
-                    ...recognition,
-                    extractedText: allText || "(no text recognized)",
-                  },
-                  null,
-                  2,
-                ),
+                text: JSON.stringify(recognitionResult, null, 2),
               },
             ],
           };
@@ -2345,6 +2760,19 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
           result.data = Buffer.from(resource.data.body).toString("base64");
         }
 
+        if (saveToPath) {
+          const dest = await validateWritableFilePath(saveToPath);
+          if (as === "binary") {
+            if (!resource.data?.body) {
+              throw new Error(`Resource ${guid} has no binary body to save`);
+            }
+            await writeFile(dest, Buffer.from(resource.data.body));
+          } else {
+            await writeFile(dest, JSON.stringify(result, null, 2), "utf8");
+          }
+          result.savedToPath = dest;
+        }
+
         return {
           content: [
             {
@@ -2356,12 +2784,21 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
       }
 
       case "evernote_add_resource_to_note": {
-        const { noteGuid, filePath, filename } = validatedArgs;
-        const updatedNote = await evernoteApi.addResourceToNote(
-          noteGuid,
-          filePath,
-          filename,
-        );
+        const { noteGuid, filePath, content, filename, mimeType } =
+          validatedArgs;
+        const updatedNote = content
+          ? await evernoteApi.addResourceToNoteFromBytes(
+              noteGuid,
+              Buffer.from(content, "base64"),
+              filename,
+              mimeType,
+            )
+          : await evernoteApi.addResourceToNote(
+              noteGuid,
+              filePath,
+              filename,
+              mimeType,
+            );
 
         return {
           content: [

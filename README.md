@@ -203,6 +203,9 @@ EVERNOTE_POLLING_ENABLED=true                                  # Auto-start poll
 EVERNOTE_POLL_INTERVAL=3600000                                 # 1 hour (min: 900000 = 15 min)
 EVERNOTE_WEBHOOK_URL=https://your-endpoint.com/webhooks/evernote  # Webhook for change notifications
 
+# Destructive operations (optional, default: off)
+EVERNOTE_ENABLE_DESTRUCTIVE=true            # Advertise + allow delete_note (trash/restore) and connection action:"revoke"
+
 # Request queue / rate limits (optional)
 EVERNOTE_MAX_CONCURRENCY=3                  # Max simultaneous Evernote RPCs through the shared queue (default: 3)
 EVERNOTE_MIN_REQUEST_INTERVAL_MS=0          # Minimum gap between RPC dispatches; 0 = no pacing (default: 0)
@@ -351,7 +354,7 @@ claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
 | `EVERNOTE_HTTP_RATE_LIMIT_PER_MINUTE` | `600` | Requests per minute per caller on `/mcp` and `/metrics` (429 when exceeded); missing/invalid keys share one bucket |
 
 Endpoints: `/mcp` (Streamable HTTP), `/metrics` (queue + session counts,
-needs a key), `/healthz` (liveness, no key). Local file paths in tools like
+needs a key), `/health` (liveness, no key; `/healthz` is an alias). Local file paths in tools like
 `evernote_add_resource_to_note` resolve on the machine running the server.
 
 ## Cookie-Based Authentication (No API Key Needed)
@@ -433,13 +436,23 @@ EVERNOTE_ALLOWED_FILE_ROOTS=/Users/you/Documents:/Users/you/Projects
 
 ## Available Tools
 
-The server exposes **15 tools** (consolidated from 27). Retired tool names still
+The server exposes **14 tools** by default (15 with `EVERNOTE_ENABLE_DESTRUCTIVE=true`,
+consolidated from 27). Retired tool names still
 work as deprecated aliases and can be re-listed with `EVERNOTE_LEGACY_TOOLS=true`
 — see [MIGRATION.md](MIGRATION.md) for the full old→new mapping. Highlights:
-`get_resource({guid, as})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
+`get_resource({guid, as, saveToPath})` projects an attachment (`text`/`binary`/`recognition`/`metadata`);
 `list_notebooks`/`list_tags` return one entity when passed a `name`/`guid`;
-`update_note` takes `replacements[]` for patch-style edits; and the `polling`
-and `connection` tools dispatch on an `action`.
+`update_note` takes `replacements[]` for patch-style edits, `addTags`/`removeTags`
+for additive tag changes, and `guids` + `notebookName` to move several notes;
+`delete_note` can `action:"restore"` a trashed note; and the `polling` and
+`connection` tools dispatch on an `action`.
+
+**Destructive operations are opt-in.** `evernote_delete_note` and the
+`connection` tool's `action:"revoke"` (plus the legacy `evernote_revoke_auth`
+alias) are only listed and callable when the server runs with
+`EVERNOTE_ENABLE_DESTRUCTIVE=true`. Without it, calls return an error naming the
+flag, and `evernote_connection` is annotated non-destructive. `update_note`'s
+`forceUpdate` stays available but still requires its confirmation string.
 
 ## Markdown Support
 
@@ -468,7 +481,8 @@ Create a new note in Evernote.
 **Parameters:**
 - `title` (required): Note title
 - `content` (required): Note content (plain text or markdown)
-- `notebookName` (optional): Target notebook name
+- `notebookName` (optional): Name of an existing notebook. Matching is exact, then case-insensitive. An unknown name is rejected with close matches (`Notebook "Meetngs" not found. Did you mean: "Meetings"?`) instead of silently creating a notebook.
+- `createNotebook` (optional): Set `true` to create `notebookName` if it does not exist (default: `false`).
 - `tags` (optional): Array of tag names
 
 **Example:**
@@ -503,7 +517,12 @@ Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 - `guids`: array of up to 25 GUIDs — metadata + `content` only (no attachment text; use a single `guid` for that). Returns `{ notes, failed?, aborted? }`; on a mid-batch rate limit it stops with partial results plus the guids left to resume.
 - `format` (optional): body projection — `markdown` (default), `text`, or `enml`
 - `includeContent` (optional): include note content (default: true)
-- `includeAttachmentText` (optional, single-note only): extract PDF/OCR attachment text (default: true)
+- `includeAttachmentText` (optional, single-note only): extract PDF/OCR attachment text into each resource's `attachmentText` (default: true)
+
+> **Breaking (since this release):** extracted attachment text is returned only as
+> `resources[].attachmentText`. The legacy duplicate fields `pdfText` (PDFs) and
+> `ocrText` (images) are no longer emitted; they doubled large responses. Read
+> `attachmentText` instead.
 
 > Returned Markdown represents embedded resources with `evernote-resource:<hash>` URLs. Leave those references intact so attachments stay linked when you edit the note.
 
@@ -511,11 +530,14 @@ Retrieve one note (full detail) or a batch of up to 25 (body-focused).
 Update an existing note. Two mutually exclusive modes:
 
 **Full-update mode parameters:**
-- `guid` (required): Note GUID
+- `guid`: Single note GUID (mutually exclusive with `guids`)
+- `guids`: Up to 25 note GUIDs for a batch move / tag edit (only `notebookName`, `addTags`, and `removeTags` are allowed)
 - `title` (optional): New title
 - `content` (optional): New content (Markdown supported)
-- `notebookName` (optional): Move the note to this notebook
-- `tags` (optional): New tags (replaces existing)
+- `notebookName` (optional): Move the note(s) to this existing notebook. Unknown names are rejected with close matches, for single notes and batches alike.
+- `createNotebook` (optional): Set `true` to create `notebookName` if it does not exist (default: `false`). Allowed in batch mode.
+- `tags` (optional): New tags (replaces existing). Mutually exclusive with `addTags`/`removeTags`.
+- `addTags` / `removeTags` (optional): Add or remove tags by name or GUID without replacing the others. Missing `addTags` names are created.
 
 **Patch mode parameter** (replaces the old `evernote_patch_note`):
 - `replacements` (optional): Array of `{find, replace, replaceAll?}` find-and-replace
@@ -523,10 +545,14 @@ Update an existing note. Two mutually exclusive modes:
   attachments. Cannot be combined with the full-update fields above.
 
 #### `evernote_delete_note`
-Delete a note.
+*Only available with `EVERNOTE_ENABLE_DESTRUCTIVE=true`.*
+Move a note to the Evernote trash, or restore a trashed note. This uses
+`NoteStore.deleteNote` (trash), not expunge — third-party apps cannot
+permanently delete notes.
 
 **Parameters:**
 - `guid` (required): Note GUID
+- `action` (optional): `"trash"` (default) or `"restore"`
 
 ### Notebook Operations
 
@@ -547,13 +573,27 @@ Rename a notebook or move it between stacks.
 **Parameters:**
 - `guid` (required): Notebook GUID
 - `name` (optional): New notebook name
-- `stack` (optional): Stack name — pass an empty string to remove it from its stack
+- `stack` (optional): Stack name — pass an empty string to remove it from its stack.
+
+Evernote Spaces are not in the public EDAM/Thrift API, so this tool moves
+notebooks between stacks only.
 
 ### Tag Operations
 
 #### `evernote_list_tags`
 List all tags in your account, or get one tag's full detail by passing its
 `name` or `guid` (absorbs the old `evernote_get_tag`).
+
+**Parameters (all optional):**
+- `name` / `guid`: return just this tag (cannot be combined with paging)
+- `query`: case-insensitive substring filter on tag names
+- `limit`: max tags per page, 1–1000 (default: all matches)
+- `offset`: tags to skip (default: 0)
+
+With none of `query`/`limit`/`offset`, the full tag array is returned exactly as
+before. With any of them, the response is
+`{ total, offset, limit, returned, hasMore, nextOffset?, tags }`, sorted by name,
+where `total` counts the filtered set.
 
 #### `evernote_create_tag`
 Create a new tag.
@@ -588,6 +628,10 @@ Read one attachment, projected through one of four views.
   - `"recognition"` — raw Evernote OCR recognition data.
   - `"metadata"` — filename, MIME type, size, hash, and `hasRecognition`.
 - `includeData` (optional, **deprecated**): `true` maps to `as:"binary"`, `false` to `as:"metadata"`.
+- `saveToPath` (optional): Write the result to a local file under an allowed root
+  (`EVERNOTE_ALLOWED_FILE_ROOTS`). `binary` writes the file bytes; `text` writes
+  extracted text; `recognition`/`metadata` write JSON. The response includes
+  `savedToPath`.
 
 There is no separate tool to list a note's attachments — `evernote_get_note`
 returns them in `resources[]`.
@@ -598,14 +642,22 @@ Get the text of the PDF attached to that invoice note
 ```
 
 #### `evernote_add_resource_to_note`
-Attach a local file to an existing note.
+Attach a file to an existing note, from a local path or a base64 body.
 
-**Parameters:**
+**Parameters:** provide exactly one of `filePath` or `content`.
 - `noteGuid` (required): Target note GUID
-- `filePath` (required): Path to the local file. Must sit under an allowed root —
+- `filePath`: Path to the local file. Must sit under an allowed root —
   see `EVERNOTE_ALLOWED_FILE_ROOTS` (defaults to your home directory and the
   current working directory).
-- `filename` (optional): Override the attachment's display name
+- `content`: Base64-encoded file body. Requires `filename`.
+- `filename`: Display name. Required with `content`; defaults to the file
+  basename when using `filePath`.
+- `mimeType` (optional): MIME type override; otherwise detected from the filename.
+
+Attachments are capped at 200 MiB (the EDAM premium limit). Free accounts may
+still be rejected by Evernote at 25 MiB. The official MCP's two-step
+`start_attachment_upload` / `finalize_attachment` flow is not used: EDAM
+accepts the full resource in a single `updateNote`.
 
 ### Connection & Account
 
@@ -617,7 +669,8 @@ Manage the Evernote connection and account. Dispatches on `action`
   `verbose:true` for detailed diagnostics.
 - `action:"user"` — current user information and quota usage.
 - `action:"reconnect"` — force reconnection (useful on "Not connected" errors).
-- `action:"revoke"` — revoke the stored authentication token.
+- `action:"revoke"` — revoke the stored authentication token. Only available
+  with `EVERNOTE_ENABLE_DESTRUCTIVE=true`.
 
 **Example:**
 ```
