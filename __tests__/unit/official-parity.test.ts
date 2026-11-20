@@ -185,6 +185,33 @@ describe("official MCP parity — EvernoteAPI", () => {
       expect(result.failed).toEqual([{ guid: "bad", error: "boom" }]);
     });
 
+    it("aborts a batch on a structured rate-limit error and keeps remaining guids", async () => {
+      const getNote = jest.fn(async (guid: string) => note({ guid }));
+      const rateLimit = Object.assign(new Error("rate limited"), {
+        errorCode: 19,
+        rateLimitDuration: 60,
+      });
+      const updateNote = jest.fn(async (n: any) => {
+        if (n.guid === "n2") throw rateLimit;
+        return n;
+      });
+      const api = makeApi({ getNote, updateNote });
+
+      const result = await api.updateNotesMetadata({
+        guids: ["n1", "n2", "n3"],
+        notebookGuid: "nb-new",
+      });
+
+      expect(result.updated.map((u) => u.guid)).toEqual(["n1"]);
+      expect(result.failed).toEqual([]);
+      expect(result.aborted).toEqual({
+        reason: "rate_limited",
+        retryAfterSeconds: 60,
+        remainingGuids: ["n2", "n3"],
+      });
+      expect(updateNote).toHaveBeenCalledTimes(2);
+    });
+
     it("rejects a tag that is both added and removed", async () => {
       const api = makeApi({
         getNote: jest.fn(async () => note()),

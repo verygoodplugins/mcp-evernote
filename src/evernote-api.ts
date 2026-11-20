@@ -572,7 +572,12 @@ export class EvernoteAPI {
       notebookGuid?: string;
       tagGuids?: string[];
     }>;
-    failed: Array<{ guid: string; error: string }>;
+    failed: Array<{ guid: string; error: string; errorCode?: number }>;
+    aborted?: {
+      reason: "rate_limited";
+      retryAfterSeconds?: number;
+      remainingGuids: string[];
+    };
   }> {
     if (
       !params.notebookGuid &&
@@ -595,9 +600,10 @@ export class EvernoteAPI {
       notebookGuid?: string;
       tagGuids?: string[];
     }> = [];
-    const failed: Array<{ guid: string; error: string }> = [];
+    const failed: Array<{ guid: string; error: string; errorCode?: number }> = [];
 
-    for (const guid of params.guids) {
+    for (let i = 0; i < params.guids.length; i++) {
+      const guid = params.guids[i];
       try {
         const existing = await this.getNote(guid, false, false);
         const payload: any = {
@@ -621,10 +627,29 @@ export class EvernoteAPI {
           notebookGuid: result.notebookGuid ?? payload.notebookGuid,
           tagGuids: result.tagGuids ?? payload.tagGuids,
         });
-      } catch (error) {
+      } catch (error: any) {
+        const { errorCode, rateLimitDuration } = getEvernoteErrorMeta(error);
+        if (isAuthErrorCode(errorCode)) {
+          throw error;
+        }
+        if (errorCode === RATE_LIMIT_ERROR_CODE) {
+          return {
+            updated,
+            failed,
+            aborted: {
+              reason: "rate_limited",
+              retryAfterSeconds:
+                typeof rateLimitDuration === "number"
+                  ? rateLimitDuration
+                  : undefined,
+              remainingGuids: params.guids.slice(i),
+            },
+          };
+        }
         failed.push({
           guid,
           error: error instanceof Error ? error.message : String(error),
+          errorCode,
         });
       }
     }

@@ -876,7 +876,7 @@ const tools: Tool[] = [
             'Required when forceUpdate is true. Must be the exact string "I understand this will delete the original note" to proceed.',
         },
       },
-      required: ["guid"],
+      required: [],
     },
   },
   {
@@ -2141,14 +2141,28 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
         if (guids || isMetadataOnly) {
           const ids: string[] = guids ?? [guid];
           let targetNotebookGuid: string | undefined;
+          let notebookWarning: string | undefined;
           if (notebookName !== undefined) {
             const notebooks = await evernoteApi.listNotebooks();
             notebookCache = notebooks;
             const notebook = notebooks.find((nb) => nb.name === notebookName);
-            if (!notebook) {
+            if (notebook) {
+              targetNotebookGuid = notebook.guid;
+            } else if (guids) {
               throw new Error(`Notebook '${notebookName}' not found`);
+            } else {
+              // Preserve auto-create for single-note moves (full-update path).
+              try {
+                const created = await evernoteApi.createNotebook(notebookName);
+                targetNotebookGuid = created.guid;
+                notebookWarning = `Notebook "${notebookName}" did not exist and was automatically created.`;
+                clearEntityCaches();
+              } catch (createError) {
+                throw new Error(
+                  `Notebook "${notebookName}" does not exist and could not be auto-created (${errorMessage(createError)})`,
+                );
+              }
             }
-            targetNotebookGuid = notebook.guid;
           }
           const result = await evernoteApi.updateNotesMetadata({
             guids: ids,
@@ -2156,11 +2170,17 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
             addTags,
             removeTags,
           });
-          const summary = {
+          const summary: any = {
             updated: result.updated,
             failed: result.failed.length > 0 ? result.failed : undefined,
           };
-          if (result.failed.length > 0 && result.updated.length === 0) {
+          if (result.aborted) {
+            summary.aborted = result.aborted;
+          }
+          if (notebookWarning) {
+            summary.notebookWarning = notebookWarning;
+          }
+          if (result.updated.length === 0 && (result.failed.length > 0 || result.aborted)) {
             return {
               content: [
                 {
@@ -2188,6 +2208,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
         console.error(`Updating note ${guid}`);
 
         let forceUpdateNotebookGuid: string | undefined;
+        let additiveTagNames: string[] | undefined;
 
         try {
           // Get existing note
@@ -2210,6 +2231,13 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
               addTags,
               removeTags,
             );
+            const allTags = await evernoteApi.listTags();
+            const tagNameByGuid = new Map(
+              allTags.map((tg) => [tg.guid!, tg.name!]),
+            );
+            additiveTagNames = (note.tagGuids ?? [])
+              .map((g: string) => tagNameByGuid.get(g))
+              .filter((name: string | undefined): name is string => !!name);
           }
 
           let notebookWarning: string | undefined;
@@ -2277,7 +2305,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
                   ),
                 notebookGuid:
                   forceUpdateNotebookGuid || originalNote.notebookGuid,
-                tagNames: tags || originalNote.tagNames,
+                tagNames: tags ?? additiveTagNames ?? originalNote.tagNames,
               });
 
               // Delete the old note
