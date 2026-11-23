@@ -91,7 +91,9 @@ the caller, never the value.
 
 ```bash
 #!/bin/bash
-# Assembles secrets from the login Keychain and execs the server.
+# Assembles secrets from an OS secret store and execs the server.
+# Works on macOS (security) and Linux (secret-tool), and defers to any value
+# already in the environment so an EnvironmentFile can supply it instead.
 # Keep /bin/bash 3.2 compatible (macOS) — no associative arrays.
 set -euo pipefail
 
@@ -100,45 +102,73 @@ NODE_BIN="/absolute/path/to/node"   # command -v node
 SERVICE="mcp-evernote-http"
 CALLERS="hub cursor desktop"        # one name per client
 
-# Print a Keychain secret, or fail naming the account (never the value).
+# Read one secret. An already-set value wins, so EnvironmentFile and the
+# secret stores are interchangeable. Prints the secret, or fails naming the
+# account — never the value.
 fetch() {
-  local value
-  value="$(security find-generic-password -a "$1" -s "$SERVICE" -w 2>/dev/null)" || value=""
+  local account="$1" preset="${2-}" value=""
+  if [ -n "$preset" ]; then
+    printf '%s' "$preset"
+    return 0
+  fi
+  if command -v security >/dev/null 2>&1; then
+    value="$(security find-generic-password -a "$account" -s "$SERVICE" -w 2>/dev/null)" || value=""
+  elif command -v secret-tool >/dev/null 2>&1; then
+    value="$(secret-tool lookup service "$SERVICE" account "$account" 2>/dev/null)" || value=""
+  fi
   if [ -z "$value" ]; then
-    echo "mcp-evernote: missing Keychain item (service=$SERVICE account=$1)" >&2
+    echo "mcp-evernote: no secret for account '$account' (service=$SERVICE)." >&2
+    echo "  Store it with security/secret-tool, or supply it via EnvironmentFile." >&2
     return 1
   fi
   printf '%s' "$value"
 }
 
 # Assign, check, then export: `export X="$(fetch ...)"` would mask the failure.
-EVERNOTE_CONSUMER_KEY="$(fetch consumer-key)" || exit 78
-EVERNOTE_CONSUMER_SECRET="$(fetch consumer-secret)" || exit 78
-EVERNOTE_ACCESS_TOKEN="$(fetch access-token)" || exit 78
+EVERNOTE_CONSUMER_KEY="$(fetch consumer-key "${EVERNOTE_CONSUMER_KEY-}")" || exit 78
+EVERNOTE_CONSUMER_SECRET="$(fetch consumer-secret "${EVERNOTE_CONSUMER_SECRET-}")" || exit 78
+EVERNOTE_ACCESS_TOKEN="$(fetch access-token "${EVERNOTE_ACCESS_TOKEN-}")" || exit 78
 export EVERNOTE_CONSUMER_KEY EVERNOTE_CONSUMER_SECRET EVERNOTE_ACCESS_TOKEN
 
-keys=""
-for caller in $CALLERS; do
-  key="$(fetch "$caller")" || exit 78
-  [ -n "$keys" ] && keys="$keys,"
-  keys="$keys$caller:$key"
-done
-export EVERNOTE_HTTP_CALLER_KEYS="$keys"
+# Already supplied whole (EnvironmentFile)? Keep it. Otherwise assemble it.
+if [ -z "${EVERNOTE_HTTP_CALLER_KEYS-}" ]; then
+  keys=""
+  for caller in $CALLERS; do
+    key="$(fetch "$caller")" || exit 78
+    [ -n "$keys" ] && keys="$keys,"
+    keys="$keys$caller:$key"
+  done
+  EVERNOTE_HTTP_CALLER_KEYS="$keys"
+fi
+export EVERNOTE_HTTP_CALLER_KEYS
 
-export EVERNOTE_ALLOWED_FILE_ROOTS="$HOME/Documents"
+export EVERNOTE_ALLOWED_FILE_ROOTS="${EVERNOTE_ALLOWED_FILE_ROOTS:-$HOME/Documents}"
 cd "$APP_DIR"
 
 # exec so signals reach node and the supervisor tracks the right PID.
 exec "$NODE_BIN" "$APP_DIR/dist/index.js" --http
 ```
 
-Two details worth keeping: `exec` means `SIGTERM` reaches node instead of the
-shell, and there is no `set -x` — the wrapper's stderr is your log file, and
-tracing would print every secret into it.
+Three details worth keeping. `exec` means `SIGTERM` reaches node instead of
+the shell. There is no `set -x` — the wrapper's stderr is your log file, and
+tracing would print every secret into it. And because an already-set value
+wins over a store lookup, the same script works unchanged whether secrets come
+from the Keychain, from `secret-tool`, or from an `EnvironmentFile`.
 
-On a headless Linux box `secret-tool` needs an unlocked keyring and a session
-bus, which a boot-time service has neither of. There, use a `0600`
-`EnvironmentFile` owned by the user the service runs as (see below).
+That last point matters on a headless Linux box, where `secret-tool` needs an
+unlocked keyring and a session bus that a boot-time service has neither of.
+There, drop the `EnvironmentFile` line in the unit below and let it populate
+the variables; the wrapper will pass them through rather than overwrite them.
+An `EnvironmentFile` holding caller keys should set
+`EVERNOTE_HTTP_CALLER_KEYS` whole:
+
+```bash
+# ~/.config/mcp-evernote/http.env — chmod 0600, owned by the service user
+EVERNOTE_CONSUMER_KEY=...
+EVERNOTE_CONSUMER_SECRET=...
+EVERNOTE_ACCESS_TOKEN=...
+EVERNOTE_HTTP_CALLER_KEYS=hub:...,cursor:...
+```
 
 ## macOS: launchd
 
