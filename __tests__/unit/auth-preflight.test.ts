@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { join, resolve } from 'path';
 import {
   hasConfiguredTokenSource,
   needsSetupNotice,
@@ -17,6 +17,10 @@ describe('auth preflight', () => {
   const noFile = () => false;
   const tokenFileAt = (expected: string) => (filePath: string) =>
     filePath === expected;
+  // Built with path.join so the separator matches the implementation's on
+  // every platform — a hardcoded '/' only matches on POSIX.
+  const TOKEN_FILE_IN_CWD = join(CWD, TOKEN_FILE_NAME);
+  const TOKEN_FILE_ELSEWHERE = join('/elsewhere', TOKEN_FILE_NAME);
 
   describe('hasConfiguredTokenSource', () => {
     it('accepts EVERNOTE_ACCESS_TOKEN on its own', () => {
@@ -52,19 +56,11 @@ describe('auth preflight', () => {
 
     it('falls back to the token file in the working directory', () => {
       expect(
-        hasConfiguredTokenSource(
-          {},
-          CWD,
-          tokenFileAt(`${CWD}/${TOKEN_FILE_NAME}`),
-        ),
+        hasConfiguredTokenSource({}, CWD, tokenFileAt(TOKEN_FILE_IN_CWD)),
       ).toBe(true);
       // A token file somewhere else does not count.
       expect(
-        hasConfiguredTokenSource(
-          {},
-          CWD,
-          tokenFileAt(`/elsewhere/${TOKEN_FILE_NAME}`),
-        ),
+        hasConfiguredTokenSource({}, CWD, tokenFileAt(TOKEN_FILE_ELSEWHERE)),
       ).toBe(false);
     });
 
@@ -106,7 +102,7 @@ describe('auth preflight', () => {
 
     it('stays quiet for a token file even with no consumer credentials', () => {
       expect(
-        needsSetupNotice({}, CWD, tokenFileAt(`${CWD}/${TOKEN_FILE_NAME}`)),
+        needsSetupNotice({}, CWD, tokenFileAt(TOKEN_FILE_IN_CWD)),
       ).toBe(false);
     });
   });
