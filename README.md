@@ -413,6 +413,8 @@ claude mcp add evernote "npx -y -p @verygoodplugins/mcp-evernote -c mcp-evernote
 
 > **Note:** `EVERNOTE_NOTESTORE_URL` is **not required** when using the cookie token — the server fetches it automatically at startup.
 
+> **Note:** `EVERNOTE_ACCESS_TOKEN` on its own is a complete configuration. The server authenticates with the token alone and never uses the consumer key/secret, which are only needed by `mcp-evernote-auth` to complete OAuth. If nothing at all is configured the server still starts and reports the problem through `evernote_connection({action:"status"})`, rather than failing to launch.
+
 ### Caveats
 
 - **Token expiry**: The `clipper-sso` token typically expires after roughly one year, or when you explicitly log out of Evernote in your browser. When it expires, log back in to [www.evernote.com](https://www.evernote.com), re-extract the cookie, and update `EVERNOTE_ACCESS_TOKEN`.

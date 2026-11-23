@@ -98,6 +98,7 @@ src/
 ├── evernote-api.ts     # EvernoteAPI class — SDK wrapper (CRUD, search, resources, sync); thin ENML conversion wrappers
 ├── markdown.ts         # Markdown ↔ ENML conversion (markdownToENML / enmlToMarkdown), GFM + local attachments
 ├── oauth.ts            # EvernoteOAuth — environment detection + token resolution order
+├── auth-preflight.ts   # Startup credential check: is a token source configured, is the "not configured" notice warranted
 ├── auth-standalone.ts  # Standalone OAuth flow (Express /oauth/callback), persists .evernote-token.json
 ├── polling.ts          # Sync-state polling: detects note/notebook/tag changes via sync chunks
 ├── webhook.ts          # HMAC-SHA256 webhook signature compute/verify
@@ -208,6 +209,18 @@ an Express server, handles `/oauth/callback` (`src/auth-standalone.ts:149`),
 and writes `.evernote-token.json` (`src/auth-standalone.ts:19`) while also
 printing the token for env-var migration.
 
+**Consumer credentials are not required to run the server.**
+`getAuthenticatedClient()` builds `new Evernote.Client({ token, sandbox,
+china })` — it never reads the consumer key/secret, which are used only by
+`auth-standalone.ts` (which reads them from the environment itself). So a
+token-only setup, including the `clipper-sso` cookie token, is a valid
+configuration. `src/auth-preflight.ts` owns that decision: the startup notice
+fires only when no token source resolves **and** no complete consumer pair is
+available to obtain one, and it never exits — an unconfigured server still
+starts so `evernote_connection({action:"status"})` can report `needs_auth` /
+`needs_setup`. Don't reinstate a hard `process.exit` on a missing consumer
+key; `__tests__/unit/auth-preflight.test.ts` pins this.
+
 ### Secrets
 
 - Never commit secrets/tokens. The following are gitignored — treat them as
@@ -225,8 +238,8 @@ fallbacks in code.
 
 | Variable | Default | Read at | Purpose |
 |---|---|---|---|
-| `EVERNOTE_CONSUMER_KEY` | — (required) | `src/index.ts:26` | OAuth consumer key; server exits if missing (`src/index.ts:29`,`44`) |
-| `EVERNOTE_CONSUMER_SECRET` | — (required) | `src/index.ts:27` | OAuth consumer secret; server exits if missing (`src/index.ts:29`,`44`) |
+| `EVERNOTE_CONSUMER_KEY` | — | `src/index.ts` | Consumer key for the standalone OAuth flow only. **Not needed by the server**, which authenticates with the access token alone |
+| `EVERNOTE_CONSUMER_SECRET` | — | `src/index.ts` | Consumer secret for the standalone OAuth flow only. **Not needed by the server** |
 | `EVERNOTE_ENVIRONMENT` | `production` | `src/index.ts:28` | `production` or `sandbox` (`sandbox` ⇒ `sandbox: true`, `src/index.ts:68`) |
 | `EVERNOTE_ACCESS_TOKEN` | — | `src/oauth.ts:21` | Primary access token |
 | `EVERNOTE_NOTESTORE_URL` | — | `src/oauth.ts:25` | NoteStore URL (fetched automatically if omitted) |

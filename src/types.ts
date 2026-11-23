@@ -1,6 +1,11 @@
 export interface EvernoteConfig {
-  consumerKey: string;
-  consumerSecret: string;
+  /**
+   * Only used by the standalone OAuth flow (`auth-standalone.ts`), which reads
+   * these from the environment itself. `EvernoteOAuth` authenticates with the
+   * access token alone, so the server does not need them.
+   */
+  consumerKey?: string;
+  consumerSecret?: string;
   sandbox: boolean;
   china?: boolean;
 }
