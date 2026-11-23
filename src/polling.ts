@@ -39,6 +39,14 @@ interface PollingEvernoteApi {
     maxEntries: number,
     filter: SyncChunkFilterShape
   ): Promise<{
+    /**
+     * Highest USN covered by this chunk. The service sets it across the whole
+     * scanned range, including objects this filter excludes, so it is the
+     * authoritative "how far did we get" marker. Absent when the chunk is empty.
+     */
+    chunkHighUSN?: number;
+    /** The account's updateCount as of this chunk — the walk's end marker. */
+    updateCount?: number;
     notes?: Array<{
       guid?: string;
       title?: string;
@@ -58,6 +66,15 @@ interface CheckForPollingChangesOptions {
   maxEntries?: number;
   now?: () => Date;
 }
+
+/**
+ * Chunks walked per poll. Deliberately far above note-cache's MAX_CHUNK_ITERATIONS
+ * of 10: that cap ends in clear(), which is safe for a cache because a dropped
+ * entry only forces a re-fetch, while a dropped change here is a webhook that
+ * never fires. Because the cursor advances only as far as the walk actually read,
+ * this cap costs an extra interval on a huge backlog rather than losing anything.
+ */
+const MAX_POLL_CHUNK_ITERATIONS = 50;
 
 export function buildSyncChunkFilter(): SyncChunkFilterShape {
   return {
@@ -105,23 +122,69 @@ export async function checkForPollingChanges({
     };
   }
 
-  try {
-    const chunk = await evernoteApi.getFilteredSyncChunk(
-      lastUpdateCount,
-      maxEntries,
-      buildSyncChunkFilter()
-    );
+  // Collected outside the try: a failure partway through the walk must keep the
+  // chunks already read and the cursor already reached. Resetting to
+  // lastUpdateCount would re-walk them next poll, so a backlog larger than one
+  // rate-limit window could never drain and would trip the poll error limit.
+  const changes: PollingChange[] = [];
+  let cursor = lastUpdateCount;
 
-    return {
-      changes: changesFromSyncChunk(chunk, now),
-      currentUpdateCount,
-      nextUpdateCount: currentUpdateCount,
-    };
+  try {
+    for (let i = 0; i < MAX_POLL_CHUNK_ITERATIONS; i++) {
+      const chunk = await evernoteApi.getFilteredSyncChunk(
+        cursor,
+        maxEntries,
+        buildSyncChunkFilter()
+      );
+
+      // Prefer the chunk's own updateCount: it is consistent with chunkHighUSN,
+      // whereas the getSyncState value was read before the walk started.
+      const head =
+        typeof chunk.updateCount === 'number'
+          ? chunk.updateCount
+          : currentUpdateCount;
+      const high = chunk.chunkHighUSN;
+
+      if (typeof high !== 'number') {
+        // Empty chunk: nothing matching the filter remains past the cursor, so
+        // the walk is done. Advance past the scanned range.
+        changes.push(...changesFromSyncChunk(chunk, now));
+        cursor = Math.max(cursor, head);
+        break;
+      }
+
+      if (high <= cursor) {
+        // No forward progress. Advancing would skip changes and looping would
+        // spin, so stop and surface it. Note the return happens before this
+        // chunk is appended and leaves the cursor where it was, so its changes
+        // are deferred to the next poll rather than lost or double-sent.
+        return {
+          changes,
+          currentUpdateCount,
+          nextUpdateCount: cursor,
+          error: new Error(
+            `sync chunk did not advance past USN ${cursor} (chunkHighUSN ${high})`
+          ),
+        };
+      }
+
+      // Append and advance together, so the two never disagree.
+      changes.push(...changesFromSyncChunk(chunk, now));
+      cursor = high;
+
+      if (high >= head) {
+        break;
+      }
+    }
+
+    // Hitting the iteration cap is not an error: the cursor advanced only as far
+    // as we actually read, so the rest of the backlog arrives on the next poll.
+    return { changes, currentUpdateCount, nextUpdateCount: cursor };
   } catch (error: unknown) {
     return {
-      changes: [],
+      changes,
       currentUpdateCount,
-      nextUpdateCount: lastUpdateCount,
+      nextUpdateCount: cursor,
       error: normalizeError(error),
     };
   }

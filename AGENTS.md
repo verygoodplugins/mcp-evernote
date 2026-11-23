@@ -305,15 +305,25 @@ Notes:
   (`updateNote`/`deleteNote`, so also `patch_note`/`add_resource_to_note`) evict
   the GUID immediately (self-write consistency), while **external** edits are
   caught by a TTL-gated `getSyncState` probe that then **loops**
-  `getFilteredSyncChunk` to evict precisely — deliberately *not* the polling
-  path's single-chunk force-advance, which silently skips changes past 100. Net:
+  `getFilteredSyncChunk` to evict precisely. Net:
   staleness for edits made elsewhere is bounded by
   `EVERNOTE_NOTE_CACHE_SYNC_TTL_MS`; reads after our own writes are immediately
   consistent. Extracted OCR/attachment text is never cached (recognition updates
   async without a USN bump) — it is always re-extracted live on read. Building
   the cache in `ensureAPI()` means reconnect/`revoke_auth` starts a fresh cache
-  (multi-account safety). Polling's own >100-change truncation is a separate,
-  pre-existing limitation and is out of scope for the cache.
+  (multi-account safety). The cache's cap-exceeded branch calls `clear()`, which
+  is safe only because it is a cache — a dropped entry just forces a re-fetch.
+- **Polling walks every chunk** (`src/polling.ts`). `checkForPollingChanges`
+  loops `getFilteredSyncChunk`, resuming from each chunk's `chunkHighUSN` and
+  ending when that reaches the chunk's own `updateCount` — the chunk's head, not
+  the earlier `getSyncState` value, so a quiet account still costs exactly one
+  call even though the filter excludes resources. `nextUpdateCount` is the USN
+  the walk actually reached, never the account head, so nothing is skipped: a
+  burst larger than `MAX_POLL_CHUNK_ITERATIONS` (50) chunks simply drains over
+  the following intervals, and a failure partway through keeps the chunks already
+  read. A chunk that does not advance the cursor returns an `error` instead of
+  looping or skipping. Until 2026-11 this read one 100-entry chunk and jumped the
+  cursor to the account head, silently dropping every change past the first 100.
 - `EVERNOTE_POLL_INTERVAL` is clamped: the effective interval is
   `max(15min, EVERNOTE_POLL_INTERVAL)` — the 15-minute floor is an Evernote
   requirement (`src/index.ts:48`).
