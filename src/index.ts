@@ -1696,7 +1696,7 @@ async function handleCallTool(request: CallToolRequest): Promise<any> {
         const healthStatus: any = {
           server: {
             name: "mcp-evernote",
-            version: "2.0.0", // x-release-please-version
+            version: "3.0.0", // x-release-please-version
             status: "running",
             environment: ENVIRONMENT,
             timestamp: new Date().toISOString(),
@@ -3024,7 +3024,7 @@ export function createEvernoteServer(): Server {
   const server = new Server(
     {
       name: "mcp-evernote",
-      version: "2.0.0", // x-release-please-version
+      version: "3.0.0", // x-release-please-version
     },
     {
       capabilities: {

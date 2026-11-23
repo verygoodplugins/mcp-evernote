@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v2.0.0...mcp-evernote-v3.0.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* get_note no longer emits resources[].pdfText/ocrText (read attachmentText); unknown notebook names no longer auto-create a notebook (pass createNotebook: true); delete_note and connection action:"revoke" require EVERNOTE_ENABLE_DESTRUCTIVE=true.
+* minimum supported Node.js is now 22.12 (Node 20 and 21 are no longer supported), required by sanitize-html 2.17.6+.
+
+### Features
+
+* add official MCP parity through existing tools ([#91](https://github.com/verygoodplugins/mcp-evernote/issues/91)) ([8af3609](https://github.com/verygoodplugins/mcp-evernote/commit/8af3609b657551205fec8c4f4ba2080cdd3178b9))
+* add Streamable HTTP mode and shared request queue ([#86](https://github.com/verygoodplugins/mcp-evernote/issues/86)) ([40f0f3f](https://github.com/verygoodplugins/mcp-evernote/commit/40f0f3f623413d1e1bca33ed16b6b4bf9084fb97))
+* require Node &gt;=22.12, run Jest as ESM, unpin sanitize-html ([#89](https://github.com/verygoodplugins/mcp-evernote/issues/89)) ([7e0e00b](https://github.com/verygoodplugins/mcp-evernote/commit/7e0e00ba0fbd47ce87ad6748adbb2761b085ab50)), closes [#82](https://github.com/verygoodplugins/mcp-evernote/issues/82)
+
+
+### Bug Fixes
+
+* **deps:** hold back typescript, marked and cheerio bumps that break the supported runtimes ([7e94d71](https://github.com/verygoodplugins/mcp-evernote/commit/7e94d714a654ae1ae3e22de920025dcb3df4c8ae))
+* don't require consumer credentials to start the server ([#93](https://github.com/verygoodplugins/mcp-evernote/issues/93)) ([aad4f78](https://github.com/verygoodplugins/mcp-evernote/commit/aad4f78cad1ce1c83755da4e2397c8306558d587))
+* walk every sync chunk when polling for changes ([#95](https://github.com/verygoodplugins/mcp-evernote/issues/95)) ([f0da7b6](https://github.com/verygoodplugins/mcp-evernote/commit/f0da7b6ac66abe9c34852decde8af23aba49ed14))
+
 ## [2.0.0](https://github.com/verygoodplugins/mcp-evernote/compare/mcp-evernote-v1.2.3...mcp-evernote-v2.0.0) (2026-08-12)
 
 
