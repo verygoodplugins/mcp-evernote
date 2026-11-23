@@ -320,8 +320,13 @@ mcp-evernote-auth
 By default every client spawns its own stdio process. HTTP mode runs **one**
 long-lived server that all local clients connect to over MCP Streamable HTTP,
 so they share one Evernote client, one auth session and one request queue.
-That doesn't raise Evernote's rate limit; it stops separate processes from
-compounding retries against the same quota.
+
+Evernote's rate limit is per auth token per hour, not per process, so this
+doesn't raise the limit — it stops separate processes from spending it twice
+over. One server means one request queue (so a rate-limit backoff pauses
+everything once, instead of each process retrying into the same exhausted
+quota) and one USN-keyed note cache (so a note read by one client is served
+from memory for the next, rather than every process starting cold).
 
 ```bash
 EVERNOTE_HTTP_CALLER_KEYS="hub:$(openssl rand -hex 24),cursor:$(openssl rand -hex 24)" \
@@ -353,6 +358,13 @@ claude mcp add --transport http evernote http://127.0.0.1:3100/mcp \
 Endpoints: `/mcp` (Streamable HTTP), `/metrics` (queue + session counts,
 needs a key), `/healthz` (liveness, no key). Local file paths in tools like
 `evernote_add_resource_to_note` resolve on the machine running the server.
+
+Nothing restarts this process for you — that job moves from the MCP client to
+you. See **[Deploying HTTP mode as a supervised
+service](docs/http-deployment.md)** for worked launchd and systemd examples,
+how to supply caller keys from an OS secret store instead of a
+world-readable service file, where to put logs, and what `ECONNREFUSED`
+actually means.
 
 ## Cookie-Based Authentication (No API Key Needed)
 
