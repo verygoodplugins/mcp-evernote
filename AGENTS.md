@@ -107,6 +107,7 @@ src/
 └── evernote.d.ts       # Ambient typings for the evernote SDK
 
 __tests__/  unit/ · integration/ · e2e/ · mocks/  (Jest; see TEST_DOCUMENTATION.md)
+docs/       http-deployment.md (supervising the HTTP transport; linked from README)
 dist/       build output — do not edit directly
 scripts/    setup.js, install-to-claude.js, detect-environment.js, post-install.js
 ```
@@ -255,7 +256,12 @@ Notes:
   `createEvernoteServer()`; handler state stays module-level in `index.ts`.
   Keep `http-server.ts` free of Evernote imports so it stays unit-testable with
   a stub server. Several unit tests regex-read `src/index.ts`, so keep the tool
-  handlers there.
+  handlers there. Nothing in this repo supervises the process: deployment
+  (launchd/systemd units, secret-store caller keys, log placement, liveness
+  probes) is documented in `docs/http-deployment.md`. Changes to HTTP flags,
+  endpoints or shutdown signal handling should be reflected there — the server
+  exits 0 on SIGTERM/SIGINT/SIGHUP, which is why that page specifies
+  `KeepAlive`/`Restart=always` rather than a success-conditional policy.
 - **Note body cache** (`src/note-cache.ts`). A per-`EvernoteAPI`-instance,
   USN-keyed, LRU cache of note bodies (ENML + metadata; resource binaries and
   recognition stripped). `get_note` (single + batch), `search_notes`
