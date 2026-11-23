@@ -1116,7 +1116,10 @@ const tools: Tool[] = [
     title: "Get attachment",
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      // saveToPath overwrites an existing local file, so a call can destroy
+      // local data. Annotations cannot vary by argument, so the tool as a
+      // whole is advertised destructive.
+      destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
@@ -1172,7 +1175,9 @@ const tools: Tool[] = [
         },
         content: {
           type: "string",
-          description: "Base64-encoded file body (mutually exclusive with filePath). Requires filename.",
+          description:
+            "Base64-encoded file body (mutually exclusive with filePath). Requires filename. " +
+            "Must be complete, standard base64 with no data: URI prefix.",
         },
         filename: {
           type: "string",

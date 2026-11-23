@@ -309,6 +309,45 @@ describe('tool schemas (M1)', () => {
       expect(result.filename).toBe('hello.txt');
     });
 
+    it('accepts line-wrapped base64 content', () => {
+      const result = AddResourceToNoteSchema.parse({
+        noteGuid: 'abc',
+        content: 'aGVs\nbG8=',
+        filename: 'hello.txt',
+      });
+      expect(result.content).toBe('aGVs\nbG8=');
+    });
+
+    it('rejects a data: URI instead of bare base64', () => {
+      expect(() =>
+        AddResourceToNoteSchema.parse({
+          noteGuid: 'abc',
+          content: 'data:text/plain;base64,aGVsbG8=',
+          filename: 'hello.txt',
+        }),
+      ).toThrow(/complete, standard base64/);
+    });
+
+    it('rejects truncated base64 content', () => {
+      expect(() =>
+        AddResourceToNoteSchema.parse({
+          noteGuid: 'abc',
+          content: 'aGVsbG8',
+          filename: 'hello.txt',
+        }),
+      ).toThrow(/complete, standard base64/);
+    });
+
+    it('rejects base64 content with invalid characters', () => {
+      expect(() =>
+        AddResourceToNoteSchema.parse({
+          noteGuid: 'abc',
+          content: 'aG!l bG8=',
+          filename: 'hello.txt',
+        }),
+      ).toThrow(/complete, standard base64/);
+    });
+
     it('rejects content without filename', () => {
       expect(() =>
         AddResourceToNoteSchema.parse({

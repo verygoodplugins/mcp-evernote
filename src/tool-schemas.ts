@@ -197,6 +197,26 @@ export const GetResourceSchema = z.object({
   saveToPath: data.saveToPath,
 }));
 
+/**
+ * Strict, complete-encoding base64 check.
+ *
+ * `Buffer.from(value, 'base64')` silently drops characters it does not
+ * recognise and accepts truncated input, so a value such as
+ * `data:text/plain;base64,aGVsbG8=` decodes to garbage bytes and is then
+ * persisted as a perfectly "successful" attachment. Validate the whole
+ * encoding before anything reaches Evernote.
+ *
+ * MIME base64 is line-wrapped, so ASCII whitespace is allowed and ignored.
+ */
+export function isCompleteBase64(value: string): boolean {
+  const compact = value.replace(/\s+/g, '');
+  if (compact.length === 0 || compact.length % 4 !== 0) {
+    return false;
+  }
+  // The character class excludes '=', so padding can only appear at the end.
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
+}
+
 export const AddResourceToNoteSchema = z.object({
   noteGuid: z.string().min(1, 'Note GUID is required'),
   filePath: z.string().min(1, 'File path is required').optional(),
@@ -216,6 +236,15 @@ export const AddResourceToNoteSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['filename'],
       message: 'filename is required when uploading via content',
+    });
+  }
+  if (data.content !== undefined && !isCompleteBase64(data.content)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['content'],
+      message:
+        'content must be complete, standard base64 (A-Z a-z 0-9 + / with optional = padding). ' +
+        'Strip any data: URI prefix and send only the encoded body.',
     });
   }
 });

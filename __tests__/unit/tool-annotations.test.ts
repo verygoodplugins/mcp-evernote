@@ -95,9 +95,10 @@ const EXPECTED_ANNOTATIONS: Record<
   },
   evernote_get_resource: {
     title: "Get attachment",
-    // saveToPath writes a local file, so this is not a pure read.
+    // saveToPath writes a local file, so this is not a pure read, and it
+    // overwrites an existing file. Annotations cannot vary by argument.
     readOnlyHint: false,
-    destructiveHint: false,
+    destructiveHint: true,
     idempotentHint: true,
     openWorldHint: true,
   },
@@ -256,11 +257,21 @@ describe("destructive gate coverage", () => {
   const tools = parseToolsArray(source, "const tools: Tool[] = [");
   const legacy = parseToolsArray(source, "const legacyTools: Tool[] = [");
 
-  it("gates every destructive tool except update_note (forceUpdate needs a confirmation string) and connection (revoke action is gated)", () => {
+  // Tools whose destructiveHint is honest but which are NOT hidden behind
+  // EVERNOTE_ENABLE_DESTRUCTIVE, because the destructive behaviour is an
+  // argument-level opt-in rather than the tool's purpose.
+  const UNGATED_DESTRUCTIVE: Record<string, string> = {
+    evernote_update_note: "forceUpdate needs a confirmation string",
+    evernote_connection: "only the revoke action is gated",
+    evernote_get_resource:
+      "reads an attachment; only the optional saveToPath can overwrite a local file",
+  };
+
+  it("gates every destructive tool except the documented argument-level cases", () => {
     const destructive = [...tools, ...legacy]
       .filter((tool) => tool.annotations.destructiveHint)
       .map((tool) => tool.name)
-      .filter((name) => name !== "evernote_update_note" && name !== "evernote_connection");
+      .filter((name) => !(name in UNGATED_DESTRUCTIVE));
     expect(destructive.sort()).toEqual([...DESTRUCTIVE_TOOL_NAMES].sort());
   });
 
