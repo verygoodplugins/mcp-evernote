@@ -59,6 +59,7 @@ import {
   checkForPollingChanges,
 } from "./polling.js";
 import { writeFile } from "fs/promises";
+import { needsSetupNotice } from "./auth-preflight.js";
 import { validateWritableFilePath } from "./path-security.js";
 
 // CJS shim: package-local require (not cwd/argv) so global bin installs work.
@@ -73,36 +74,43 @@ silenceEvernoteStdio();
 // Load environment variables
 config({ quiet: true });
 
-// Validate required environment variables with clear instructions
+// Consumer credentials are OPTIONAL for the server. `EvernoteOAuth` builds its
+// client from the access token alone (`new Evernote.Client({ token, ... })`);
+// the consumer key/secret are only used by the standalone OAuth flow in
+// `auth-standalone.ts`, which reads them from the environment itself. Requiring
+// them here used to exit(1) before any transport started, which made the
+// documented cookie-token setup (token only) impossible to run and kept
+// `evernote_connection({action:"status"})` from ever reporting needs_setup.
 const CONSUMER_KEY = process.env.EVERNOTE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.EVERNOTE_CONSUMER_SECRET;
 const ENVIRONMENT = process.env.EVERNOTE_ENVIRONMENT || "production";
-if (!CONSUMER_KEY || !CONSUMER_SECRET) {
+
+// Nothing to authenticate with AND no way to obtain it: say so once, loudly,
+// but keep running. The server still answers `evernote_connection` so the user
+// can diagnose, and `EvernoteOAuth` emits full re-auth instructions on the
+// first call that needs a token.
+if (needsSetupNotice()) {
   console.error("");
   console.error(
     "=== IMPORTANT: RELAY THIS MESSAGE TO THE USER IMMEDIATELY ===",
   );
   console.error("");
-  console.error("EVERNOTE MCP SERVER - CONFIGURATION ERROR");
+  console.error("EVERNOTE MCP SERVER - NOT CONFIGURED");
   console.error("");
-  console.error("Missing required environment variables:");
-  if (!CONSUMER_KEY)
-    console.error(
-      "  - EVERNOTE_CONSUMER_KEY (get from https://dev.evernote.com/)",
-    );
-  if (!CONSUMER_SECRET)
-    console.error(
-      "  - EVERNOTE_CONSUMER_SECRET (get from https://dev.evernote.com/)",
-    );
+  console.error("No Evernote credentials found. Set one of:");
   console.error("");
-  console.error("Set these in your MCP server configuration:");
-  console.error(
-    "  claude mcp add evernote <command> --env EVERNOTE_CONSUMER_KEY=<key> --env EVERNOTE_CONSUMER_SECRET=<secret>",
-  );
+  console.error("  EVERNOTE_ACCESS_TOKEN - an access token, or the");
+  console.error("      'clipper-sso' cookie from the Evernote web app.");
+  console.error("      This alone is enough; no consumer key is needed.");
+  console.error("");
+  console.error("  EVERNOTE_CONSUMER_KEY + EVERNOTE_CONSUMER_SECRET - then run");
+  console.error("      'npx -p @verygoodplugins/mcp-evernote mcp-evernote-auth'");
+  console.error("      to complete OAuth (https://dev.evernote.com/).");
+  console.error("");
+  console.error("Tools will report 'needs_auth' until one is configured.");
   console.error("");
   console.error("=== END OF MESSAGE TO RELAY ===");
   console.error("");
-  process.exit(1);
 }
 
 // Polling configuration
