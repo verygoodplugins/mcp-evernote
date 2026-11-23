@@ -157,8 +157,9 @@ from the Keychain, from `secret-tool`, or from an `EnvironmentFile`.
 
 That last point matters on a headless Linux box, where `secret-tool` needs an
 unlocked keyring and a session bus that a boot-time service has neither of.
-There, drop the `EnvironmentFile` line in the unit below and let it populate
-the variables; the wrapper will pass them through rather than overwrite them.
+There, **uncomment** the `EnvironmentFile` line in the unit below and let it
+populate the variables; the wrapper passes them through rather than
+overwrite them.
 An `EnvironmentFile` holding caller keys should set
 `EVERNOTE_HTTP_CALLER_KEYS` whole:
 
@@ -258,8 +259,10 @@ ExecStart=/path/to/mcp-evernote/bin/mcp-evernote-http-launcher
 Restart=always
 RestartSec=10
 
-# Optional alternative to a secret-store wrapper. Must be owned by this user
-# and chmod 0600 — a --user unit cannot read a root-owned file.
+# Optional: supply the secrets from a file instead of a secret store. The
+# launcher passes through anything already set, so these win over a lookup.
+# Must be owned by this user and chmod 0600 — a --user unit cannot read a
+# root-owned file.
 # EnvironmentFile=%h/.config/mcp-evernote/http.env
 
 [Install]
@@ -278,8 +281,15 @@ Two things that bite:
   at boot: `loginctl enable-linger $USER`.
 - **A volatile journal is the Linux `/tmp` problem.** If
   `/var/log/journal` doesn't exist, logs are memory-only and vanish on reboot,
-  taking the crash with them. `sudo mkdir -p /var/log/journal &&
-  sudo systemd-tmpfiles --create` makes them persistent.
+  taking the crash with them. Creating the directory is not enough on its own
+  — a running `systemd-journald` keeps writing to the volatile store until it
+  is told to switch:
+
+  ```bash
+  sudo mkdir -p /var/log/journal
+  sudo systemd-tmpfiles --create --prefix /var/log/journal
+  sudo journalctl --flush
+  ```
 
 ## Readiness and liveness
 
